@@ -203,8 +203,11 @@ Hard rules:
 - NO stock photos. Build imagery with CSS: gradients, shapes, patterns, emoji where tasteful.
 - Write realistic, specific copy for this business — headlines, feature text, prices, names. Never lorem ipsum, never "placeholder".
 - Include the site navigation bar listing EVERY page of the site. Each nav link must be exactly: <a href="#" data-page="PageName">PageName</a> (data-page = exact page name given). Mark the current page visually.
-- Implement every listed section, in order, honoring each section's "need" and user notes. Include a footer if listed.
+- Implement EXACTLY the listed sections, in order, honoring each section's "need", its listed child elements, and user notes. Do not invent extra sections; if a section lists elements (e.g. a form's fields), implement every one of them.
 - Forms/buttons are visual only (no real submission).
+- After </html>, append ONE HTML comment reporting the structure you actually built, exactly:
+<!--STRUCTURE {"sections":[{"name":"Hero","need":"one-line summary of what it shows","elements":[{"name":"Headline"},{"name":"CTA button"}]}]}-->
+The comment's section/element names must match what is really on the page — this syncs the visual architecture tree.
 Keep total output under 700 lines.`;
 
   async function generateWithClaude(prompt: string) {
@@ -312,8 +315,46 @@ Rules: IDs must come from the given tree. Use the selected element when the inst
       brand: tree.brand || { primary: "#4f46b8", font: "Inter", vibe: "clean, modern, confident" },
       pages: pagesC.children.map((p: any) => p.label),
       currentPage: pg.label,
-      sections: pg.children.map((s: any) => ({ name: s.label, need: s.need, notes: s.notes, color: s.color || undefined })),
+      sections: pg.children.map((s: any) => ({
+        name: s.label,
+        need: s.need,
+        notes: s.notes,
+        color: s.color || undefined,
+        elements: s.children.map((el: any) => ({ name: el.label, need: el.need || undefined, notes: el.notes && el.notes.length ? el.notes : undefined })),
+      })),
     });
+  }
+  /* Sync the architecture tree to the structure Claude actually built,
+     preserving node ids (and their connections) where labels match. */
+  function reconcilePage(pg: any, secs: any[]) {
+    if (!Array.isArray(secs) || !secs.length) return false;
+    snap();
+    const usedS = new Set<number>();
+    pg.children = secs.map((s: any) => {
+      const nameS = String(s.name || "Section");
+      let ex = pg.children.find((c: any) => !usedS.has(c.id) && c.label.toLowerCase() === nameS.toLowerCase());
+      if (!ex) ex = node(cap(nameS), "section", "", "Rendered as a block inside its page.");
+      usedS.add(ex.id);
+      if (s.need) ex.need = String(s.need);
+      if (Array.isArray(s.elements)) {
+        const usedE = new Set<number>();
+        const oldEls = ex.children;
+        ex.children = s.elements.map((el: any) => {
+          const nameE = String(el.name || "Element");
+          let ee = oldEls.find((c: any) => !usedE.has(c.id) && c.label.toLowerCase() === nameE.toLowerCase());
+          if (!ee) ee = node(cap(nameE), "element", el.need ? String(el.need) : "", "Part of its section.");
+          usedE.add(ee.id);
+          return ee;
+        });
+      }
+      return ex;
+    });
+    /* prune connections and selection that pointed at removed nodes */
+    const alive = new Set(allNodes(tree).map((n: any) => n.id));
+    conns = conns.filter((c) => alive.has(c.from) && alive.has(c.to));
+    if (sel != null && !alive.has(sel)) sel = pg.id;
+    if (curPage != null && !alive.has(curPage)) curPage = pg.id;
+    return true;
   }
   async function buildPage(pg: any, announce?: boolean) {
     if (!pg) return;
@@ -328,10 +369,14 @@ Rules: IDs must come from the given tree. Use the selected element when the inst
       const raw = await claude(model, PAGE_SYSTEM, pageContext(pg));
       pg.html = injectNav(extractHtml(raw));
       pg.stale = false;
+      /* sync the tree to what Claude actually built */
+      let synced = false;
+      const sm = raw.match(/<!--\s*STRUCTURE\s*({[\s\S]*?})\s*-->/);
+      if (sm) { try { synced = reconcilePage(pg, JSON.parse(sm[1]).sections); } catch { /* keep tree as-is */ } }
       typing(false);
-      addMsg("ai", "✓ <b>" + esc(pg.label) + "</b> built — this is real generated code, not a template. Click around, or tell me what to change and press Rebuild.");
+      addMsg("ai", "✓ <b>" + esc(pg.label) + "</b> built — real generated code, not a template." + (synced ? " The architecture tree is synced to the page." : "") + " Tell me what to change and press Rebuild.");
       pvMode = "live";
-      renderPreview();
+      renderAll();
       toast(pg.label + " built ✓");
     } catch (err: any) {
       typing(false);
@@ -893,7 +938,7 @@ Rules: IDs must come from the given tree. Use the selected element when the inst
     const r = tv.getBoundingClientRect();
     panX = r.width / 2 - (nd.x + NW / 2) * scale; panY = r.height / 2 - (nd.y + NH / 2) * scale; tf();
   });
-  $("dDesk").onclick = () => { $("site").style.maxWidth = "860px"; $("siteLive").style.maxWidth = "860px"; $("dDesk").classList.add("on"); $("dMob").classList.remove("on"); };
+  $("dDesk").onclick = () => { $("site").style.maxWidth = "860px"; $("siteLive").style.maxWidth = "100%"; $("dDesk").classList.add("on"); $("dMob").classList.remove("on"); };
   $("dMob").onclick = () => { $("site").style.maxWidth = "390px"; $("siteLive").style.maxWidth = "390px"; $("dMob").classList.add("on"); $("dDesk").classList.remove("on"); };
   $("mBlue").onclick = () => { pvMode = "blueprint"; $("mBlue").classList.add("on"); $("mLive").classList.remove("on"); renderPreview(); };
   $("mLive").onclick = () => { pvMode = "live"; $("mLive").classList.add("on"); $("mBlue").classList.remove("on"); renderPreview(); };

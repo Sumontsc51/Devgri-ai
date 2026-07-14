@@ -176,8 +176,8 @@ export const BUILDER_HTML = `
           <button id="tFit" title="Fit">Fit</button>
         </div>
       </div>
-      <div id="previewview">
-        <div style="display:flex;justify-content:center;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap;">
+      <div id="previewview" style="padding:12px;">
+        <div style="display:flex;justify-content:center;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap;">
           <div class="seg"><button id="mBlue"><i class="ti ti-layout-list" style="font-size:13px"></i> Blueprint</button><button id="mLive" class="on"><i class="ti ti-world" style="font-size:13px"></i> Live site</button></div>
           <div class="seg"><button id="dDesk" class="on"><i class="ti ti-device-desktop" style="font-size:13px"></i> Desktop</button><button id="dMob"><i class="ti ti-device-mobile" style="font-size:13px"></i> Mobile</button></div>
           <button class="primary" id="pBuild"><i class="ti ti-sparkles" style="font-size:13px"></i> <span id="pBuildTxt">Build page with Claude</span></button>
@@ -188,8 +188,8 @@ export const BUILDER_HTML = `
           <div id="ptabs"></div>
           <div id="psecs"></div>
         </div>
-        <div id="siteLive" style="display:none;max-width:860px;margin:0 auto;">
-          <iframe id="siteFrame" title="Live site preview" style="width:100%;height:calc(100vh - 200px);border:1px solid var(--border);border-radius:12px;background:#fff;display:block;"></iframe>
+        <div id="siteLive" style="display:none;max-width:100%;margin:0 auto;">
+          <iframe id="siteFrame" title="Live site preview" style="width:100%;height:calc(100vh - 170px);border:1px solid var(--border);border-radius:12px;background:#fff;display:block;"></iframe>
         </div>
       </div>
     </div>
