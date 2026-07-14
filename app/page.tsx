@@ -24,6 +24,12 @@ export default function LandingPage() {
         </div>
         <div className="flex items-center gap-3">
           <Link
+            href="/builder"
+            className="rounded-lg px-4 py-2 text-sm text-gray-300 transition hover:text-white"
+          >
+            Builder
+          </Link>
+          <Link
             href="/login"
             className="rounded-lg px-4 py-2 text-sm text-gray-300 transition hover:text-white"
           >
