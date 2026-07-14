@@ -137,6 +137,10 @@ export const BUILDER_HTML = `
     <button data-ex="A project management dashboard with reports and team tracking">Project dashboard</button>
     <button data-ex="A portfolio site with gallery and booking for a photographer">Photographer portfolio</button>
   </div>
+  <div id="projrow" style="display:none;flex-direction:column;align-items:center;gap:8px;">
+    <span style="font-size:11px;color:var(--text-muted);">Your saved projects</span>
+    <div class="chips" id="projchips"></div>
+  </div>
 </div>
 
 <div id="build">
@@ -148,7 +152,8 @@ export const BUILDER_HTML = `
     </div>
     <button id="bUndo" title="Undo last change"><i class="ti ti-arrow-back-up" style="font-size:15px"></i> Undo</button>
     <span style="flex:1"></span>
-    <button id="bSave" title="Save project to your account"><i class="ti ti-device-floppy" style="font-size:15px"></i> Save</button>
+    <button id="bExport" title="Download the built site as a .zip"><i class="ti ti-download" style="font-size:15px"></i> Export</button>
+    <button id="bSave" title="Save project to your account"><i class="ti ti-device-floppy" style="font-size:15px"></i> <span id="bSaveTxt">Save</span></button>
     <button id="bSet" title="AI settings"><i class="ti ti-settings" style="font-size:15px"></i></button>
     <button id="bProps" title="Show or hide properties"><i class="ti ti-layout-sidebar-right" style="font-size:15px"></i></button>
     <button id="bNew" title="Start a new project"><i class="ti ti-plus" style="font-size:15px"></i> New project</button>
@@ -189,7 +194,7 @@ export const BUILDER_HTML = `
           <div id="psecs"></div>
         </div>
         <div id="siteLive" style="display:none;max-width:100%;margin:0 auto;">
-          <iframe id="siteFrame" title="Live site preview" style="width:100%;height:calc(100vh - 170px);border:1px solid var(--border);border-radius:12px;background:#fff;display:block;"></iframe>
+          <iframe id="siteFrame" title="Live site preview" sandbox="allow-scripts" style="width:100%;height:calc(100vh - 170px);border:1px solid var(--border);border-radius:12px;background:#fff;display:block;"></iframe>
         </div>
       </div>
     </div>
@@ -200,22 +205,24 @@ export const BUILDER_HTML = `
 <div id="setmodal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:15;align-items:center;justify-content:center;">
   <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:14px;padding:20px;width:380px;max-width:92vw;">
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;"><i class="ti ti-settings" style="font-size:18px;color:var(--text-accent)"></i><b>AI settings</b><span style="flex:1"></span><button id="setClose" title="Close">✕</button></div>
-    <div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px;">Anthropic API key (BYOK — stays in this tab, sent only to Anthropic)</div>
-    <input type="password" id="kKey" placeholder="sk-ant-…" style="width:100%;margin-bottom:12px;">
-    <div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px;">Claude models used for routing</div>
-    <label style="display:block;font-size:13px;margin:4px 0;"><input type="checkbox" id="kOpus" checked> Claude Opus 4.8</label>
-    <label style="display:block;font-size:13px;margin:4px 0;"><input type="checkbox" id="kSonnet" checked> Claude Sonnet 5</label>
-    <label style="display:block;font-size:13px;margin:4px 0;"><input type="checkbox" id="kHaiku" checked> Claude Haiku 4.5</label>
-    <div style="font-size:12px;color:var(--text-secondary);margin:12px 0 6px;">Routing</div>
-    <label style="display:block;font-size:13px;margin:4px 0;"><input type="radio" name="rmode" id="mAuto" checked> Auto — system analyzes the project and decides</label>
+    <div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px;">API keys (BYOK — stay in this tab, sent only to their own provider)</div>
+    <div style="display:flex;align-items:center;gap:8px;margin:4px 0;"><span style="font-size:12px;width:78px;">Anthropic</span><input type="password" id="kKeyAnthropic" placeholder="sk-ant-…" style="flex:1;"></div>
+    <div style="display:flex;align-items:center;gap:8px;margin:4px 0;"><span style="font-size:12px;width:78px;">OpenAI</span><input type="password" id="kKeyOpenai" placeholder="sk-…" style="flex:1;"></div>
+    <div style="display:flex;align-items:center;gap:8px;margin:4px 0;"><span style="font-size:12px;width:78px;">Google</span><input type="password" id="kKeyGoogle" placeholder="AIza…" style="flex:1;"></div>
+    <div style="font-size:12px;color:var(--text-secondary);margin:12px 0 6px;">Routing — which model handles each kind of task</div>
+    <label style="display:block;font-size:13px;margin:4px 0;"><input type="radio" name="rmode" id="mAuto" checked> Auto — best available model per task</label>
     <label style="display:block;font-size:13px;margin:4px 0;"><input type="radio" name="rmode" id="mMan"> Hardcoded — I choose per task</label>
     <div id="manrows" style="opacity:.45;pointer-events:none;margin-top:6px;">
-      <div style="display:flex;gap:8px;align-items:center;margin:4px 0;"><span style="font-size:12px;width:110px;">Frontend</span><select id="sFront"><option value="sonnet" selected>Claude Sonnet 5</option><option value="opus">Claude Opus 4.8</option><option value="haiku">Claude Haiku 4.5</option></select></div>
-      <div style="display:flex;gap:8px;align-items:center;margin:4px 0;"><span style="font-size:12px;width:110px;">Backend and logic</span><select id="sBack"><option value="sonnet">Claude Sonnet 5</option><option value="opus" selected>Claude Opus 4.8</option><option value="haiku">Claude Haiku 4.5</option></select></div>
-      <div style="display:flex;gap:8px;align-items:center;margin:4px 0;"><span style="font-size:12px;width:110px;">Images and UI</span><select id="sMedia"><option value="sonnet">Claude Sonnet 5</option><option value="opus">Claude Opus 4.8</option><option value="haiku" selected>Claude Haiku 4.5</option></select></div>
+      <div style="display:flex;gap:8px;align-items:center;margin:4px 0;"><span style="font-size:12px;width:110px;">Frontend</span><select id="sFront" class="mrsel" style="flex:1;"></select></div>
+      <div style="display:flex;gap:8px;align-items:center;margin:4px 0;"><span style="font-size:12px;width:110px;">Backend and logic</span><select id="sBack" class="mrsel" style="flex:1;"></select></div>
+      <div style="display:flex;gap:8px;align-items:center;margin:4px 0;"><span style="font-size:12px;width:110px;">Images and UI</span><select id="sMedia" class="mrsel" style="flex:1;"></select></div>
     </div>
     <button class="primary" id="setDone" style="width:100%;justify-content:center;margin-top:14px;">Done</button>
   </div>
 </div>
 <div id="toast" role="status"></div>
+<div id="tokbar" style="display:none;position:fixed;bottom:12px;left:12px;z-index:12;font-size:10.5px;color:var(--text-muted);background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:4px 9px;box-shadow:var(--shadow);cursor:pointer;user-select:none;" title="Session token usage (estimated)">
+  <span id="tokline"></span>
+  <div id="tokdetail" style="display:none;margin-top:5px;line-height:1.7;"></div>
+</div>
 `;

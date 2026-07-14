@@ -1,14 +1,14 @@
 "use client";
 
 /* The finalized AI app builder — one merged system:
-   chat + architecture tree + preview, powered by real Claude (BYOK).
-   Supabase handles auth and project persistence. */
+   chat + architecture tree + live site preview, powered by real AI models
+   (Anthropic / OpenAI / Google, BYOK). Supabase handles auth and projects. */
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { BUILDER_CSS, BUILDER_HTML } from "./ui";
-import { initBuilder, type SavedProject } from "./engine";
+import { initBuilder, type ProjectRow } from "./engine";
 
 export default function BuilderPage() {
   const router = useRouter();
@@ -29,26 +29,25 @@ export default function BuilderPage() {
       if (cancelled) return;
       const uid = data.session.user.id;
 
-      /* Load the most recent saved builder project (if any). */
-      let initial: SavedProject = null;
-      let workspaceId: string | null = null;
+      /* Load saved builder projects (most recent first). */
+      const projects: ProjectRow[] = [];
       try {
-        const { data: ws } = await supabase
+        const { data: rows } = await supabase
           .from("workspaces")
-          .select("id, nodes")
+          .select("id, name, nodes")
           .eq("user_id", uid)
           .order("updated_at", { ascending: false })
-          .limit(1)
-          .maybeSingle();
-        if (ws) {
-          workspaceId = ws.id;
+          .limit(10);
+        (rows || []).forEach((ws) => {
           const n = ws.nodes as { builder?: boolean; tree?: unknown; conns?: unknown[] } | null;
-          if (n && n.builder && n.tree) {
-            initial = { tree: n.tree, conns: (n.conns as never[]) || [] };
-          }
-        }
+          projects.push({
+            id: ws.id,
+            name: ws.name || "Untitled",
+            data: n && n.builder && n.tree ? { tree: n.tree, conns: (n.conns as never[]) || [] } : null,
+          });
+        });
       } catch {
-        /* no saved project — start fresh */
+        /* start fresh */
       }
       if (cancelled) return;
 
@@ -59,26 +58,26 @@ export default function BuilderPage() {
         if (cancelled || bootedRef.current || !rootRef.current) return;
         bootedRef.current = true;
         initBuilder(rootRef.current, {
-          initial,
-          save: async ({ tree, conns, name }) => {
+          projects,
+          save: async ({ tree, conns, name }, projectId) => {
             const payload = {
               user_id: uid,
               name,
               nodes: { builder: true, tree, conns, name },
               edges: [],
             };
-            const result = workspaceId
-              ? await supabase.from("workspaces").update(payload).eq("id", workspaceId)
-              : await supabase.from("workspaces").insert(payload).select("id").single();
-            if (result.error) {
-              return result.error.message.toLowerCase().includes("policy")
-                ? "trial ended — read-only. Upgrade to keep saving."
-                : result.error.message;
+            if (projectId) {
+              const { error } = await supabase.from("workspaces").update(payload).eq("id", projectId);
+              if (error) return { error: friendly(error.message) };
+              return { id: projectId };
             }
-            if (!workspaceId && "data" in result && result.data) {
-              workspaceId = (result.data as { id: string }).id;
-            }
-            return null;
+            const { data: created, error } = await supabase
+              .from("workspaces")
+              .insert(payload)
+              .select("id")
+              .single();
+            if (error) return { error: friendly(error.message) };
+            return { id: (created as { id: string }).id };
           },
           signOut: async () => {
             await supabase.auth.signOut();
@@ -121,4 +120,10 @@ export default function BuilderPage() {
       />
     </>
   );
+}
+
+function friendly(msg: string): string {
+  return msg.toLowerCase().includes("policy")
+    ? "trial ended — read-only. Upgrade to keep saving."
+    : msg;
 }

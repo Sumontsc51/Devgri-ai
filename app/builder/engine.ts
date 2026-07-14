@@ -6,20 +6,37 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-export type SavedProject = { tree: any; conns: any[]; name?: string } | null;
+export type ProjectRow = { id: string; name: string; data: { tree: any; conns: any[] } | null };
 
 export type BuilderHandles = {
-  initial: SavedProject;
-  save: (data: { tree: any; conns: any[]; name: string }) => Promise<string | null>; // returns error message or null
+  projects: ProjectRow[];
+  save: (data: { tree: any; conns: any[]; name: string }, projectId: string | null) => Promise<{ id?: string; error?: string }>;
   signOut: () => void;
 };
 
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
+const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
+const GOOGLE_URL = "https://generativelanguage.googleapis.com/v1beta/models/";
 
-const MODEL_IDS: Record<string, string> = {
-  opus: "claude-opus-4-8",
-  sonnet: "claude-sonnet-5",
-  haiku: "claude-haiku-4-5-20251001",
+type Provider = "anthropic" | "openai" | "google";
+type ModelDef = { provider: Provider; id: string; label: string; price: [number, number] };
+
+/* Model registry — price is rough USD per million tokens [in, out], display only. */
+const MODELS: Record<string, ModelDef> = {
+  opus: { provider: "anthropic", id: "claude-opus-4-8", label: "Claude Opus 4.8", price: [15, 75] },
+  sonnet: { provider: "anthropic", id: "claude-sonnet-5", label: "Claude Sonnet 5", price: [3, 15] },
+  haiku: { provider: "anthropic", id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5", price: [1, 5] },
+  gpt4o: { provider: "openai", id: "gpt-4o", label: "GPT-4o", price: [2.5, 10] },
+  gpt4omini: { provider: "openai", id: "gpt-4o-mini", label: "GPT-4o mini", price: [0.15, 0.6] },
+  gemini25pro: { provider: "google", id: "gemini-2.5-pro", label: "Gemini 2.5 Pro", price: [1.25, 10] },
+  gemini20flash: { provider: "google", id: "gemini-2.0-flash", label: "Gemini 2.0 Flash", price: [0.1, 0.4] },
+};
+const PROVIDER_LABEL: Record<Provider, string> = { anthropic: "Anthropic", openai: "OpenAI", google: "Google" };
+/* Auto-routing preference per task domain, best-first. */
+const AUTOPREF: Record<string, string[]> = {
+  back: ["opus", "gpt4o", "gemini25pro", "sonnet", "gemini20flash", "gpt4omini", "haiku"],
+  front: ["sonnet", "gpt4o", "gemini25pro", "opus", "haiku", "gemini20flash", "gpt4omini"],
+  media: ["haiku", "gemini20flash", "gpt4omini", "sonnet", "gpt4o", "gemini25pro", "opus"],
 };
 
 export function initBuilder(root: HTMLElement, handles: BuilderHandles): void {
@@ -39,21 +56,24 @@ export function initBuilder(root: HTMLElement, handles: BuilderHandles): void {
   const COLORS: Record<string, string> = { blue: "#E6F1FB", green: "#EAF3DE", red: "#FCEBEB", purple: "#EEEDFE", pink: "#FBEAF0", teal: "#E1F5EE", amber: "#FAEEDA", orange: "#FAECE7", gray: "#F1EFE8", white: "#FFFFFF" };
   const COLORTX: Record<string, string> = { blue: "#0C447C", green: "#27500A", red: "#791F1F", purple: "#3C3489", pink: "#72243E", teal: "#085041", amber: "#633806", orange: "#712B13", gray: "#444441", white: "#1f1e1b" };
 
-  const PROVIDERS: Record<string, string> = { opus: "Claude Opus 4.8", sonnet: "Claude Sonnet 5", haiku: "Claude Haiku 4.5" };
-  const DEFROUTE: Record<string, string> = { front: "sonnet", back: "opus", media: "haiku" };
   const WHY: Record<string, string> = { front: "frontend", back: "backend and logic", media: "images and UI polish" };
-  const settings: any = { apiKey: "", keys: { opus: true, sonnet: true, haiku: true }, mode: "auto", manual: { front: "sonnet", back: "opus", media: "haiku" } };
+  const settings: any = { keys: { anthropic: "", openai: "", google: "" }, mode: "auto", manual: { front: "sonnet", back: "opus", media: "haiku" } };
 
   function domainOf(n: any) { if (n.type === "section" && /hero|gallery|image|banner/i.test(n.label)) return "media"; return ["datas", "table", "field", "logics", "action", "step", "tools", "tool", "option", "project"].indexOf(n.type) > -1 ? "back" : "front"; }
-  function avail() { return Object.keys(PROVIDERS).filter((k) => settings.keys[k]); }
-  function pickFor(d: string) { const av = avail(); if (!av.length) return null; if (av.length === 1) return av[0]; const p = settings.mode === "manual" ? settings.manual[d] : DEFROUTE[d]; return av.indexOf(p) > -1 ? p : av[0]; }
-  function modelOf(n: any) { const p = pickFor(domainOf(n)); return p ? PROVIDERS[p] : "No model"; }
-  function whyOf(n: any) { const av = avail(); if (av.length <= 1) return av.length ? "only enabled model" : "enable a model"; return (settings.mode === "manual" ? "hardcoded: " : "auto: ") + WHY[domainOf(n)]; }
+  function hasAnyKey() { return !!(settings.keys.anthropic || settings.keys.openai || settings.keys.google); }
+  function avail() { return Object.keys(MODELS).filter((k) => settings.keys[MODELS[k].provider]); }
+  function pickFor(d: string): string | null {
+    const av = avail(); if (!av.length) return null;
+    if (settings.mode === "manual" && av.indexOf(settings.manual[d]) > -1) return settings.manual[d];
+    for (const k of AUTOPREF[d] || []) if (av.indexOf(k) > -1) return k;
+    return av[0];
+  }
+  function modelOf(n: any) { const p = pickFor(domainOf(n)); return p ? MODELS[p].label : "No model"; }
+  function whyOf(n: any) { const av = avail(); if (av.length <= 1) return av.length ? "only available model" : "add an API key"; return (settings.mode === "manual" ? "hardcoded: " : "auto: ") + WHY[domainOf(n)]; }
   function routeSummary() {
-    if (!settings.apiKey) return "No API key connected — running in <b>offline demo mode</b>. Add your Anthropic key in AI settings (gear icon) to design with real Claude.";
-    const av = avail(); if (!av.length) return "No models enabled — enable at least one in AI settings.";
-    if (av.length === 1) return "Everything runs on <b>" + PROVIDERS[av[0]] + "</b> via your Anthropic key. Enable more models and the system routes per task.";
-    return "Model routing (" + (settings.mode === "manual" ? "your hardcoded mapping" : "auto-selected by system analysis") + "):<br>• frontend → <b>" + PROVIDERS[pickFor("front")!] + "</b><br>• backend and logic → <b>" + PROVIDERS[pickFor("back")!] + "</b><br>• images and UI → <b>" + PROVIDERS[pickFor("media")!] + "</b><br>All calls go browser-direct to Anthropic with your key — never through Devgri.";
+    if (!hasAnyKey()) return "No API keys connected — running in <b>offline demo mode</b>. Add an Anthropic, OpenAI, or Google key in AI settings (gear icon) to design with real AI.";
+    const provs = (["anthropic", "openai", "google"] as Provider[]).filter((p) => settings.keys[p]).map((p) => PROVIDER_LABEL[p]).join(", ");
+    return "Model routing (" + (settings.mode === "manual" ? "your hardcoded mapping" : "auto — best available per task") + "):<br>• frontend → <b>" + MODELS[pickFor("front")!].label + "</b><br>• backend and logic → <b>" + MODELS[pickFor("back")!].label + "</b><br>• images and UI → <b>" + MODELS[pickFor("media")!].label + "</b><br>Keys connected: " + provs + ". All calls go browser-direct to the provider — never through Devgri.";
   }
 
   function node(label: string, type: string, need?: string, how?: string, children?: any[]): any { return { id: uid++, label, type, need: need || "", how: how || "", color: "", notes: [], children: children || [] }; }
@@ -67,26 +87,84 @@ export function initBuilder(root: HTMLElement, handles: BuilderHandles): void {
   function cluster(type: string) { return tree.children.find((c: any) => c.type === type); }
   function cap(s: string) { return s.charAt(0).toUpperCase() + s.slice(1); }
 
-  /* ---------------- real Claude transport ---------------- */
-  async function claude(model: string, system: string, userText: string): Promise<string> {
-    const response = await fetch(ANTHROPIC_URL, {
+  /* ---------------- token usage tracking ---------------- */
+  const usage = { calls: 0, inTok: 0, outTok: 0, cost: 0, maxCost: 0, perModel: {} as Record<string, { calls: number; inTok: number; outTok: number; cost: number }> };
+  function fmtTok(n: number) { return n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(n); }
+  function trackUsage(modelKey: string, inT: number, outT: number) {
+    const def = MODELS[modelKey]; if (!def) return;
+    const cost = (inT / 1e6) * def.price[0] + (outT / 1e6) * def.price[1];
+    const po = MODELS.opus.price;
+    usage.calls++; usage.inTok += inT; usage.outTok += outT; usage.cost += cost;
+    usage.maxCost += (inT / 1e6) * po[0] + (outT / 1e6) * po[1];
+    const m = (usage.perModel[modelKey] = usage.perModel[modelKey] || { calls: 0, inTok: 0, outTok: 0, cost: 0 });
+    m.calls++; m.inTok += inT; m.outTok += outT; m.cost += cost;
+    renderTok();
+  }
+  function renderTok() {
+    const bar = $("tokbar"), line = $("tokline"), det = $("tokdetail");
+    if (!bar || !usage.calls) return;
+    bar.style.display = "block";
+    const saved = usage.maxCost - usage.cost;
+    line.innerHTML = "⛁ " + fmtTok(usage.inTok + usage.outTok) + " tok · ~$" + usage.cost.toFixed(usage.cost < 0.1 ? 3 : 2) + (saved > 0.004 ? ' · <span style="color:#1D9E75">saved $' + saved.toFixed(saved < 0.1 ? 3 : 2) + "</span>" : "");
+    det.innerHTML = Object.keys(usage.perModel).map((k) => { const m = usage.perModel[k]; return "<b>" + esc(MODELS[k] ? MODELS[k].label : k) + "</b>: " + m.calls + " call" + (m.calls === 1 ? "" : "s") + " · " + fmtTok(m.inTok) + " in / " + fmtTok(m.outTok) + " out · ~$" + m.cost.toFixed(3); }).join("<br>") + '<br><span style="opacity:.7">Estimates · savings vs running everything on the priciest model</span>';
+    bar.onclick = () => { det.style.display = det.style.display === "none" ? "block" : "none"; };
+  }
+
+  /* ---------------- unified multi-provider transport ---------------- */
+  async function callModel(modelKey: string, system: string, userText: string): Promise<string> {
+    const def = MODELS[modelKey];
+    if (!def) throw new Error("Unknown model: " + modelKey);
+    const key = settings.keys[def.provider];
+    if (!key) throw new Error("No " + PROVIDER_LABEL[def.provider] + " API key — add one in AI settings");
+
+    if (def.provider === "anthropic") {
+      const response = await fetch(ANTHROPIC_URL, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+        body: JSON.stringify({ model: def.id, max_tokens: 8192, system, messages: [{ role: "user", content: userText }] }),
+      });
+      const json = await parseOrThrow(response);
+      trackUsage(modelKey, json.usage?.input_tokens || 0, json.usage?.output_tokens || 0);
+      const block = Array.isArray(json.content) ? json.content.find((c: any) => c.type === "text") : null;
+      return block?.text ?? "";
+    }
+    if (def.provider === "openai") {
+      const response = await fetch(OPENAI_URL, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: "Bearer " + key },
+        body: JSON.stringify({ model: def.id, max_tokens: 8192, messages: [{ role: "system", content: system }, { role: "user", content: userText }] }),
+      });
+      const json = await parseOrThrow(response);
+      trackUsage(modelKey, json.usage?.prompt_tokens || 0, json.usage?.completion_tokens || 0);
+      return json.choices?.[0]?.message?.content ?? "";
+    }
+    /* google */
+    const response = await fetch(GOOGLE_URL + def.id + ":generateContent?key=" + encodeURIComponent(key), {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": settings.apiKey,
-        "anthropic-version": "2023-06-01",
-        "anthropic-dangerous-direct-browser-access": "true",
-      },
-      body: JSON.stringify({ model, max_tokens: 8192, system, messages: [{ role: "user", content: userText }] }),
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ system_instruction: { parts: [{ text: system }] }, contents: [{ role: "user", parts: [{ text: userText }] }], generationConfig: { maxOutputTokens: 8192 } }),
     });
+    const json = await parseOrThrow(response);
+    trackUsage(modelKey, json.usageMetadata?.promptTokenCount || 0, json.usageMetadata?.candidatesTokenCount || 0);
+    const parts = json.candidates?.[0]?.content?.parts;
+    return Array.isArray(parts) ? parts.map((p: any) => p.text || "").join("") : "";
+  }
+  async function parseOrThrow(response: Response): Promise<any> {
     if (!response.ok) {
       let detail = "HTTP " + response.status;
-      try { const err = await response.json(); detail = err?.error?.message ?? detail; } catch { /* keep */ }
+      try { const err = await response.json(); detail = err?.error?.message ?? err?.error?.status ?? detail; } catch { /* keep */ }
       throw new Error(detail);
     }
-    const json = await response.json();
-    const block = Array.isArray(json.content) ? json.content.find((c: any) => c.type === "text") : null;
-    return block?.text ?? "";
+    return response.json();
+  }
+  /* Retry-and-repair: one retry with the parse error fed back to the model. */
+  async function callAndParse<T>(modelKey: string, system: string, userText: string, parse: (raw: string) => T): Promise<T> {
+    try {
+      return parse(await callModel(modelKey, system, userText));
+    } catch (firstErr: any) {
+      const note = "\n\nIMPORTANT: your previous reply was invalid (" + String(firstErr?.message || firstErr) + "). Respond again following the required output format EXACTLY.";
+      return parse(await callModel(modelKey, system, userText + note));
+    }
   }
 
   function extractJson(text: string): any {
@@ -198,7 +276,7 @@ Rules: 3-7 pages, each with 2-4 sections. 2-5 tables. 1-4 actions with 2-4 steps
   const PAGE_SYSTEM = `You are the frontend model of an AI app builder. Generate ONE complete, standalone, production-quality HTML page for the described page of a website.
 Hard rules:
 - Output ONLY raw HTML starting with <!DOCTYPE html>. No markdown, no fences, no commentary.
-- All CSS in a single <style> tag in <head>. No external CSS or JS. A Google Fonts <link> is allowed.
+- If "designCss" is provided, include it VERBATIM as the first <style> in <head> and REUSE its classes (.nav, .btn, .card, .section, .container, .footer, grids) so every page of the site matches; add only page-specific styles in a second <style>. Otherwise all CSS in a single <style>. No external CSS or JS. A Google Fonts <link> is allowed.
 - Fully responsive (mobile-first, flex/grid). Polished, modern, cohesive design driven by the given brand (primary color, font, vibe). Real visual depth: gradients, spacing rhythm, hover states.
 - NO stock photos. Build imagery with CSS: gradients, shapes, patterns, emoji where tasteful.
 - Write realistic, specific copy for this business — headlines, feature text, prices, names. Never lorem ipsum, never "placeholder".
@@ -210,11 +288,13 @@ Hard rules:
 The comment's section/element names must match what is really on the page — this syncs the visual architecture tree.
 Keep total output under 700 lines.`;
 
-  async function generateWithClaude(prompt: string) {
-    const model = MODEL_IDS[pickFor("back") || "sonnet"];
-    const raw = await claude(model, ARCH_SYSTEM, prompt);
-    const spec = extractJson(raw);
-    if (!spec || !Array.isArray(spec.pages) || !spec.pages.length) throw new Error("Model returned an invalid architecture");
+  async function generateWithAI(prompt: string) {
+    const mk = pickFor("back")!;
+    const spec = await callAndParse(mk, ARCH_SYSTEM, prompt, (raw) => {
+      const s = extractJson(raw);
+      if (!s || !Array.isArray(s.pages) || !s.pages.length) throw new Error("missing pages array");
+      return s;
+    });
     if (spec.brand && typeof spec.brand === "object") pendingBrand = spec.brand;
     return assembleProject(String(spec.name || deriveName(prompt)), prompt, spec.pages.map((pg: any) => ({ name: String(pg.name || "Page"), sections: Array.isArray(pg.sections) ? pg.sections.map((s: any) => ({ name: String(s.name || "Section"), need: s.need ? String(s.need) : undefined })) : [] })), Array.isArray(spec.tables) ? spec.tables.map((t: any) => ({ name: String(t.name || "Table"), fields: String(t.fields || "") })) : [], Array.isArray(spec.actions) ? spec.actions.map((a: any) => ({ name: String(a.name || "Action"), trigger: a.trigger ? String(a.trigger) : "Manual", steps: Array.isArray(a.steps) ? a.steps.map((s: any) => ({ label: String(s.label || "Step"), kind: s.kind })) : [] })) : [], Array.isArray(spec.tools) ? spec.tools.map((t: any) => String(t)) : ["Search"], Array.isArray(spec.connections) ? spec.connections : []);
   }
@@ -313,6 +393,7 @@ Rules: IDs must come from the given tree. Use the selected element when the inst
       site: tree.label,
       about: tree.need,
       brand: tree.brand || { primary: "#4f46b8", font: "Inter", vibe: "clean, modern, confident" },
+      designCss: tree.designCss || undefined,
       pages: pagesC.children.map((p: any) => p.label),
       currentPage: pg.label,
       sections: pg.children.map((s: any) => ({
@@ -331,18 +412,22 @@ Rules: IDs must come from the given tree. Use the selected element when the inst
     snap();
     const usedS = new Set<number>();
     pg.children = secs.map((s: any) => {
-      const nameS = String(s.name || "Section");
-      let ex = pg.children.find((c: any) => !usedS.has(c.id) && c.label.toLowerCase() === nameS.toLowerCase());
+      const nameS = String(s.name || "Section"), lowS = nameS.toLowerCase();
+      let ex = pg.children.find((c: any) => !usedS.has(c.id) && c.label.toLowerCase() === lowS)
+        || pg.children.find((c: any) => !usedS.has(c.id) && (c.label.toLowerCase().includes(lowS) || lowS.includes(c.label.toLowerCase())));
       if (!ex) ex = node(cap(nameS), "section", "", "Rendered as a block inside its page.");
+      else ex.label = cap(nameS);
       usedS.add(ex.id);
       if (s.need) ex.need = String(s.need);
       if (Array.isArray(s.elements)) {
         const usedE = new Set<number>();
         const oldEls = ex.children;
         ex.children = s.elements.map((el: any) => {
-          const nameE = String(el.name || "Element");
-          let ee = oldEls.find((c: any) => !usedE.has(c.id) && c.label.toLowerCase() === nameE.toLowerCase());
+          const nameE = String(el.name || "Element"), lowE = nameE.toLowerCase();
+          let ee = oldEls.find((c: any) => !usedE.has(c.id) && c.label.toLowerCase() === lowE)
+            || oldEls.find((c: any) => !usedE.has(c.id) && (c.label.toLowerCase().includes(lowE) || lowE.includes(c.label.toLowerCase())));
           if (!ee) ee = node(cap(nameE), "element", el.need ? String(el.need) : "", "Part of its section.");
+          else ee.label = cap(nameE);
           usedE.add(ee.id);
           return ee;
         });
@@ -356,28 +441,56 @@ Rules: IDs must come from the given tree. Use the selected element when the inst
     if (curPage != null && !alive.has(curPage)) curPage = pg.id;
     return true;
   }
+  const DESIGN_SYSTEM = `You are the design-system model of an AI app builder. Given a site brief, output ONLY raw CSS (no markdown, no fences, no HTML) defining a reusable design system all pages will share:
+- :root variables built from the brand (primary color + shades, surfaces, text colors, radius, spacing)
+- a minimal reset, base typography using the brand font (assume it is loaded)
+- classes: .nav (sticky site header), .nav a, .nav a.active, .btn, .btn-primary, .card, .section (vertical rhythm), .container (max-width wrapper), .footer, .grid-2, .grid-3
+- responsive rules for mobile
+Under 220 lines.`;
+
+  async function ensureDesignSystem() {
+    if (tree.designCss) return;
+    const mk = pickFor("front")!;
+    const brief = JSON.stringify({ site: tree.label, about: tree.need, brand: tree.brand || {}, pages: cluster("pages").children.map((p: any) => p.label) });
+    const css = await callAndParse(mk, DESIGN_SYSTEM, brief, (raw) => {
+      let c = raw.trim();
+      const fence = c.match(/```(?:css)?\s*([\s\S]*?)```/);
+      if (fence) c = fence[1].trim();
+      if (!/[{}]/.test(c) || /<html/i.test(c)) throw new Error("not CSS");
+      return c;
+    });
+    tree.designCss = css;
+    addMsg("ai", "Design system generated — every page will share the same nav, buttons, cards and rhythm.");
+  }
+
   async function buildPage(pg: any, announce?: boolean) {
     if (!pg) return;
-    if (!settings.apiKey) { toast("Add your Anthropic key in AI settings to build the real site"); $("setmodal").style.display = "flex"; return; }
+    if (!hasAnyKey()) { toast("Add an API key in AI settings to build the real site"); $("setmodal").style.display = "flex"; return; }
     if (building) { toast("Already building a page — one moment"); return; }
     building = true;
     updateBuildBtn(pg);
-    if (announce !== false) addMsg("ai", "Building <b>" + esc(pg.label) + "</b> for real with <b>" + esc(PROVIDERS[pickFor("front") || "sonnet"]) + "</b>…");
+    const mk = pickFor("front")!;
+    if (announce !== false) addMsg("ai", "Building <b>" + esc(pg.label) + "</b> for real with <b>" + esc(MODELS[mk].label) + "</b>…");
     typing(true);
     try {
-      const model = MODEL_IDS[pickFor("front") || "sonnet"];
-      const raw = await claude(model, PAGE_SYSTEM, pageContext(pg));
-      pg.html = injectNav(extractHtml(raw));
+      await ensureDesignSystem();
+      const out = await callAndParse(mk, PAGE_SYSTEM, pageContext(pg), (raw) => {
+        const html = extractHtml(raw);
+        if (html.indexOf("</html>") === -1) throw new Error("HTML truncated — output a more compact page that fits");
+        return { html, raw };
+      });
+      pg.html = injectNav(out.html);
       pg.stale = false;
-      /* sync the tree to what Claude actually built */
+      /* sync the tree to what the model actually built */
       let synced = false;
-      const sm = raw.match(/<!--\s*STRUCTURE\s*({[\s\S]*?})\s*-->/);
+      const sm = out.raw.match(/<!--\s*STRUCTURE\s*({[\s\S]*?})\s*-->/);
       if (sm) { try { synced = reconcilePage(pg, JSON.parse(sm[1]).sections); } catch { /* keep tree as-is */ } }
       typing(false);
       addMsg("ai", "✓ <b>" + esc(pg.label) + "</b> built — real generated code, not a template." + (synced ? " The architecture tree is synced to the page." : "") + " Tell me what to change and press Rebuild.");
       pvMode = "live";
       renderAll();
       toast(pg.label + " built ✓");
+      scheduleAutosave();
     } catch (err: any) {
       typing(false);
       addMsg("ai", '<span style="color:var(--text-danger)">Page build failed: ' + esc(err?.message || "unknown error") + "</span> — press Build to retry.");
@@ -446,19 +559,19 @@ Rules: IDs must come from the given tree. Use the selected element when the inst
     $("build").style.display = "flex";
     addMsg("user", esc(prompt));
     let g: any = null;
-    if (settings.apiKey) {
-      await ai("Got it — asking <b>" + esc(PROVIDERS[pickFor("back") || "sonnet"]) + "</b> to design the <b>architecture</b>…", 600);
+    if (hasAnyKey()) {
+      await ai("Got it — asking <b>" + esc(MODELS[pickFor("back")!].label) + "</b> to design the <b>architecture</b>…", 600);
       typing(true);
       try {
-        g = await generateWithClaude(prompt);
+        g = await generateWithAI(prompt);
         typing(false);
       } catch (err: any) {
         typing(false);
-        addMsg("ai", '<span style="color:var(--text-danger)">Claude call failed: ' + esc(err?.message || "unknown error") + "</span><br>Falling back to the offline template.");
+        addMsg("ai", '<span style="color:var(--text-danger)">AI call failed: ' + esc(err?.message || "unknown error") + "</span><br>Falling back to the offline template.");
         g = null;
       }
     } else {
-      await ai("No API key set — designing with the <b>offline template</b>. Add your Anthropic key in AI settings (gear icon) for real Claude designs.", 800);
+      await ai("No API key set — designing with the <b>offline template</b>. Add an Anthropic, OpenAI, or Google key in AI settings (gear icon) for real AI designs.", 800);
     }
     if (!g) g = genProject(prompt);
     uid = 0; allNodes(g.root).forEach((n: any) => (uid = Math.max(uid, n.id + 1)));
@@ -475,17 +588,21 @@ Rules: IDs must come from the given tree. Use the selected element when the inst
     pvMode = "live";
     setView("preview");
     await ai("<b>Done!</b> Your project is ready. Try this:<br>• <b>Live site</b> shows the real generated website; <b>Blueprint</b> shows the architecture blocks<br>• click any block in the <b>Blueprint</b> — it gets selected in the <b>Tree</b> too<br>• with something selected, just tell me what to change: <i>“make it blue”, “add testimonials”, “rename to Our story”, “connect to Contact”</i> — then <b>Rebuild</b> the page<br>• select an action under <b>Logic</b> and press <b>Test run</b> to watch the automation execute<br>• press <b>Save</b> to keep this project on your account", 1100);
-    if (settings.apiKey) {
+    if (hasAnyKey()) {
       const first = g.pageNodes.length ? g.pageNodes[0] : null;
       if (first) await buildPage(first);
     }
+    scheduleAutosave();
   }
   function newProject() {
-    tree = null; conns = []; open = new Set(); sel = null; curPage = null; connectFrom = null;
+    clearTimeout(autosaveTimer);
+    tree = null; conns = []; open = new Set(); sel = null; curPage = null; connectFrom = null; currentProjectId = null; lastFrameKey = "";
     $("msgs").innerHTML = ""; $("build").style.display = "none"; $("start").style.display = "flex";
-    $("p0").value = ""; $("p0").focus();
+    ($("p0") as HTMLTextAreaElement).value = ""; $("p0").focus();
+    renderProjects();
   }
   function restoreProject(saved: { tree: any; conns: any[] }) {
+    $("msgs").innerHTML = ""; lastFrameKey = "";
     tree = saved.tree; conns = saved.conns || [];
     allNodes(tree).forEach((n: any) => { n.notes = n.notes || []; n.children = n.children || []; uid = Math.max(uid, n.id + 1); });
     open = new Set([tree.id]); const pc = cluster("pages"); if (pc) open.add(pc.id);
@@ -549,23 +666,26 @@ Rules: IDs must come from the given tree. Use the selected element when the inst
     addMsg("user", esc(text));
     const t = text.toLowerCase();
     if (/^undo\b/.test(t)) { undo(); await ai("Undid the last change.", 500); return; }
-    if (!settings.apiKey) { await handlePromptLocal(text); return; }
-    /* real Claude ops */
+    if (!hasAnyKey()) { await handlePromptLocal(text); return; }
+    /* real AI ops */
     typing(true);
     try {
       const n = sel != null ? find(tree, sel) : null;
-      const model = MODEL_IDS[pickFor(n ? domainOf(n) : "back") || "sonnet"];
+      const mk = pickFor(n ? domainOf(n) : "back")!;
       const userMsg = "PROJECT STATE:\n" + treeContext() + "\n\nSELECTED ELEMENT: " + (n ? n.id + " (" + n.type + " “" + n.label + "”)" : "none") + "\n\nUSER INSTRUCTION:\n" + text;
-      const raw = await claude(model, OPS_SYSTEM, userMsg);
-      const out = extractJson(raw);
+      const out = await callAndParse(mk, OPS_SYSTEM, userMsg, (raw) => {
+        const o = extractJson(raw);
+        if (typeof o.reply !== "string") throw new Error("missing reply field");
+        return o;
+      });
       typing(false);
       snap();
       const applied = applyOps(Array.isArray(out.ops) ? out.ops : []);
-      if (applied) renderAll();
-      addMsg("ai", esc(String(out.reply || "Done.")) + (applied ? '<br><span style="color:var(--text-muted);font-size:12px;">' + applied + " change" + (applied === 1 ? "" : "s") + " applied by " + esc(PROVIDERS[pickFor(n ? domainOf(n) : "back") || "sonnet"]) + "</span>" : ""));
+      if (applied) { renderAll(); scheduleAutosave(); }
+      addMsg("ai", esc(String(out.reply || "Done.")) + (applied ? '<br><span style="color:var(--text-muted);font-size:12px;">' + applied + " change" + (applied === 1 ? "" : "s") + " applied by " + esc(MODELS[mk].label) + "</span>" : ""));
     } catch (err: any) {
       typing(false);
-      addMsg("ai", '<span style="color:var(--text-danger)">Claude call failed: ' + esc(err?.message || "unknown error") + "</span> — you can retry, or I can apply simple commands offline (add / rename / delete / connect / colors).");
+      addMsg("ai", '<span style="color:var(--text-danger)">AI call failed: ' + esc(err?.message || "unknown error") + "</span> — you can retry, or I can apply simple commands offline (add / rename / delete / connect / colors).");
     }
   }
 
@@ -880,28 +1000,121 @@ Rules: IDs must come from the given tree. Use the selected element when the inst
 
   /* ---------------- undo ---------------- */
   const hist: string[] = [];
-  function snap() { hist.push(JSON.stringify({ t: tree, c: conns })); if (hist.length > 30) hist.shift(); }
+  function snap() { hist.push(JSON.stringify({ t: tree, c: conns })); if (hist.length > 30) hist.shift(); scheduleAutosave(); }
   function undo() { if (!hist.length) { toast("Nothing to undo"); return; } const s = JSON.parse(hist.pop()!); tree = s.t; conns = s.c; if (sel != null && !find(tree, sel)) sel = tree.id; if (curPage != null && !find(tree, curPage)) curPage = null; renderAll(); toast("Undone"); }
 
-  /* ---------------- save ---------------- */
-  async function doSave() {
-    if (!tree) { toast("Nothing to save yet"); return; }
-    toast("Saving…");
-    const clean = JSON.parse(JSON.stringify({ tree, conns })); // strips undefined; layout coords are fine
-    const err = await handles.save({ tree: clean.tree, conns: clean.conns, name: tree.label });
-    toast(err ? "Save failed: " + err : "Project saved ✓");
+  /* ---------------- save / autosave / projects ---------------- */
+  let currentProjectId: string | null = null;
+  let autosaveTimer: any = null;
+  let saving = false;
+  function setSaveLabel(t: string) { const el = $("bSaveTxt"); if (el) el.textContent = t; }
+  async function doSave(silent?: boolean) {
+    if (!tree) { if (!silent) toast("Nothing to save yet"); return; }
+    if (saving) return;
+    saving = true;
+    setSaveLabel("Saving…");
+    const clean = JSON.parse(JSON.stringify({ tree, conns })); // strips undefined + functions
+    const r = await handles.save({ tree: clean.tree, conns: clean.conns, name: tree.label }, currentProjectId);
+    saving = false;
+    if (r.error) {
+      setSaveLabel("Save");
+      if (!silent) toast("Save failed: " + r.error);
+      return;
+    }
+    if (r.id) {
+      if (!currentProjectId) handles.projects.unshift({ id: r.id, name: tree.label, data: clean });
+      currentProjectId = r.id;
+      const row = handles.projects.find((p) => p.id === currentProjectId);
+      if (row) { row.name = tree.label; row.data = clean; }
+    }
+    setSaveLabel("Saved ✓");
+    setTimeout(() => setSaveLabel("Save"), 2200);
+    if (!silent) toast("Project saved ✓");
+  }
+  function scheduleAutosave() {
+    if (!tree) return;
+    clearTimeout(autosaveTimer);
+    autosaveTimer = setTimeout(() => doSave(true), 4000);
+  }
+  function renderProjects() {
+    const row = $("projrow"), chips = $("projchips");
+    if (!row || !chips) return;
+    const list = handles.projects.filter((p) => p.data && p.data.tree);
+    if (!list.length) { row.style.display = "none"; return; }
+    row.style.display = "flex";
+    chips.innerHTML = list.slice(0, 6).map((p) => '<button data-proj="' + esc(p.id) + '"><i class="ti ti-folder-open" style="font-size:12px;margin-right:4px;"></i>' + esc(p.name || "Untitled") + "</button>").join("");
+    chips.querySelectorAll("[data-proj]").forEach((b: any) => (b.onclick = () => {
+      const p = handles.projects.find((x) => x.id === b.dataset.proj);
+      if (p && p.data) { currentProjectId = p.id; restoreProject(JSON.parse(JSON.stringify(p.data))); }
+    }));
+  }
+
+  /* ---------------- export (.zip of the built site) ---------------- */
+  function slugOf(l: string) { return l.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "page"; }
+  async function exportSite() {
+    if (!tree) { toast("Nothing to export yet"); return; }
+    const pages = cluster("pages").children;
+    const built = pages.filter((p: any) => p.html);
+    if (!built.length) { toast("No pages built yet — build the live site first"); return; }
+    toast("Packing site…");
+    try {
+      if (!(window as any).JSZip) {
+        await new Promise<void>((res, rej) => {
+          const s = document.createElement("script");
+          s.src = "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js";
+          s.onload = () => res(); s.onerror = () => rej(new Error("Could not load the zip library"));
+          document.head.appendChild(s);
+        });
+      }
+      const JSZip = (window as any).JSZip;
+      const zip = new JSZip();
+      const fileOf = (p: any) => (p.id === pages[0].id ? "index.html" : slugOf(p.label) + ".html");
+      built.forEach((p: any) => {
+        let html = p.html.split(NAV_SCRIPT).join("");
+        pages.forEach((q: any) => {
+          html = html.split('href="#" data-page="' + q.label + '"').join('href="' + fileOf(q) + '"');
+          html = html.split("href='#' data-page='" + q.label + "'").join('href="' + fileOf(q) + '"');
+        });
+        zip.file(fileOf(p), html);
+      });
+      zip.file("README.txt", tree.label + "\nExported from Devgri AI Builder.\nOpen index.html in a browser, or upload the folder to any static host (Vercel, Netlify, GitHub Pages).\n");
+      const blob = await zip.generateAsync({ type: "blob" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = slugOf(tree.label) + "-site.zip";
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      const missing = pages.filter((p: any) => !p.html).map((p: any) => p.label);
+      addMsg("ai", "⬇ Exported <b>" + built.length + " page" + (built.length === 1 ? "" : "s") + "</b> as a static site." + (missing.length ? " Not built yet (skipped): " + esc(missing.join(", ")) + "." : "") + " Open index.html locally or drop the folder on any static host.");
+      toast("Site exported ✓");
+    } catch (err: any) {
+      toast("Export failed: " + (err?.message || "unknown error"));
+    }
   }
 
   /* ---------------- settings ---------------- */
   function refreshKeyHint() {
     const el = $("p0key");
     if (!el) return;
-    el.innerHTML = settings.apiKey ? 'Claude connected — designs are real. <b id="p0keySet">Change key</b>' : 'No API key — offline demo mode. <b id="p0keySet">Add key</b>';
+    const provs = (["anthropic", "openai", "google"] as Provider[]).filter((p) => settings.keys[p]).map((p) => PROVIDER_LABEL[p]);
+    el.innerHTML = provs.length ? provs.join(" + ") + ' connected — designs are real. <b id="p0keySet">Manage keys</b>' : 'No API keys — offline demo mode. <b id="p0keySet">Add keys</b>';
     const set = $("p0keySet"); if (set) set.onclick = () => { $("setmodal").style.display = "flex"; };
   }
+  function buildModelSelects() {
+    const groups: Record<string, string[]> = { anthropic: [], openai: [], google: [] };
+    Object.keys(MODELS).forEach((k) => groups[MODELS[k].provider].push(k));
+    const html = (["anthropic", "openai", "google"] as Provider[]).map((p) => '<optgroup label="' + PROVIDER_LABEL[p] + '">' + groups[p].map((k) => '<option value="' + k + '">' + esc(MODELS[k].label) + "</option>").join("") + "</optgroup>").join("");
+    (["sFront", "sBack", "sMedia"] as const).forEach((id) => { const s = $(id) as HTMLSelectElement; if (s) s.innerHTML = html; });
+    ($("sFront") as HTMLSelectElement).value = settings.manual.front;
+    ($("sBack") as HTMLSelectElement).value = settings.manual.back;
+    ($("sMedia") as HTMLSelectElement).value = settings.manual.media;
+  }
   function applySettings() {
-    settings.apiKey = ($("kKey") as HTMLInputElement).value.trim();
-    settings.keys = { opus: ($("kOpus") as HTMLInputElement).checked, sonnet: ($("kSonnet") as HTMLInputElement).checked, haiku: ($("kHaiku") as HTMLInputElement).checked };
+    settings.keys = {
+      anthropic: ($("kKeyAnthropic") as HTMLInputElement).value.trim(),
+      openai: ($("kKeyOpenai") as HTMLInputElement).value.trim(),
+      google: ($("kKeyGoogle") as HTMLInputElement).value.trim(),
+    };
     settings.mode = ($("mMan") as HTMLInputElement).checked ? "manual" : "auto";
     settings.manual = { front: ($("sFront") as HTMLSelectElement).value, back: ($("sBack") as HTMLSelectElement).value, media: ($("sMedia") as HTMLSelectElement).value };
     $("setmodal").style.display = "none";
@@ -917,7 +1130,8 @@ Rules: IDs must come from the given tree. Use the selected element when the inst
   $("vPrev").onclick = () => setView("preview");
   $("bNew").onclick = () => { if (confirm("Start a new project? The current one will be discarded (save first if you want to keep it).")) newProject(); };
   $("bProps").onclick = () => { propsOpen = !propsOpen; renderProps(); };
-  $("bSave").onclick = doSave;
+  $("bSave").onclick = () => doSave(false);
+  $("bExport").onclick = exportSite;
   $("bOut").onclick = () => handles.signOut();
   $("send").onclick = () => { const v = ($("pin") as HTMLTextAreaElement).value.trim(); if (!v) return; ($("pin") as HTMLTextAreaElement).value = ""; handlePrompt(v); };
   $("pin").addEventListener("keydown", (e: KeyboardEvent) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("send").click(); } });
@@ -949,10 +1163,13 @@ Rules: IDs must come from the given tree. Use the selected element when the inst
   root.querySelectorAll("input[name=rmode]").forEach((r: any) => (r.onchange = () => { const man = ($("mMan") as HTMLInputElement).checked; $("manrows").style.opacity = man ? "1" : ".45"; $("manrows").style.pointerEvents = man ? "auto" : "none"; }));
   window.addEventListener("resize", () => { if (view === "tree") fit(); });
   refreshKeyHint();
+  buildModelSelects();
 
   /* ---------------- boot ---------------- */
-  if (handles.initial && handles.initial.tree) {
-    try { restoreProject(handles.initial as any); } catch { newProject(); }
+  renderProjects();
+  const latest = handles.projects.find((p) => p.data && p.data.tree);
+  if (latest) {
+    try { currentProjectId = latest.id; restoreProject(JSON.parse(JSON.stringify(latest.data))); } catch { newProject(); }
   } else {
     ($("p0") as HTMLTextAreaElement).focus();
   }
