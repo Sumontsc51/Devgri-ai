@@ -30,6 +30,7 @@ export function initBuilder(root: HTMLElement, handles: BuilderHandles): void {
   const NW = 176, NH = 44, COLW = 232, VGAP = 14;
   let uid = 0, tree: any = null, conns: any[] = [], open = new Set<number>(), sel: number | null = null, curPage: number | null = null;
   let view = "tree", scale = 1, panX = 40, panY = 30, connectFrom: number | null = null, propsOpen = true, selConn: number | null = null, linking: any = null;
+  let pvMode = "live", building = false, pendingBrand: any = null, lastFrameKey = "";
   const $ = (id: string) => root.querySelector<HTMLElement>("#" + id) as any;
   const esc = (s: any) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
 
@@ -190,14 +191,28 @@ Respond with ONLY a single raw JSON object — no markdown, no fences:
  "tables":[{"name":"Products","fields":"name, price, image"}],
  "actions":[{"name":"Place order","trigger":"Form submitted","steps":[{"label":"AI: validate order","kind":"ai"},{"label":"Write to Orders","kind":"table"},{"label":"Email confirmation","kind":"notify"}]}],
  "tools":["Search","Payments"],
- "connections":[{"from":"Product grid","to":"Products","type":"data"},{"from":"Checkout button","to":"Place order","type":"event"}]}
-Rules: 3-7 pages, each with 2-4 sections. 2-5 tables. 1-4 actions with 2-4 steps each (kinds: ai, table, notify, condition). 1-4 tools. Connections reference exact section/table/action names; types: data (section reads/writes table) or event (section triggers action). Keep names short.`;
+ "connections":[{"from":"Product grid","to":"Products","type":"data"},{"from":"Checkout button","to":"Place order","type":"event"}],
+ "brand":{"primary":"#4f46b8","font":"Inter","vibe":"clean, modern, confident"}}
+Rules: 3-7 pages, each with 2-4 sections. 2-5 tables. 1-4 actions with 2-4 steps each (kinds: ai, table, notify, condition). 1-4 tools. Connections reference exact section/table/action names; types: data (section reads/writes table) or event (section triggers action). Keep names short. "brand" picks a primary hex color, one Google Font name, and a 3-word design vibe fitting the business.`;
+
+  const PAGE_SYSTEM = `You are the frontend model of an AI app builder. Generate ONE complete, standalone, production-quality HTML page for the described page of a website.
+Hard rules:
+- Output ONLY raw HTML starting with <!DOCTYPE html>. No markdown, no fences, no commentary.
+- All CSS in a single <style> tag in <head>. No external CSS or JS. A Google Fonts <link> is allowed.
+- Fully responsive (mobile-first, flex/grid). Polished, modern, cohesive design driven by the given brand (primary color, font, vibe). Real visual depth: gradients, spacing rhythm, hover states.
+- NO stock photos. Build imagery with CSS: gradients, shapes, patterns, emoji where tasteful.
+- Write realistic, specific copy for this business — headlines, feature text, prices, names. Never lorem ipsum, never "placeholder".
+- Include the site navigation bar listing EVERY page of the site. Each nav link must be exactly: <a href="#" data-page="PageName">PageName</a> (data-page = exact page name given). Mark the current page visually.
+- Implement every listed section, in order, honoring each section's "need" and user notes. Include a footer if listed.
+- Forms/buttons are visual only (no real submission).
+Keep total output under 700 lines.`;
 
   async function generateWithClaude(prompt: string) {
     const model = MODEL_IDS[pickFor("back") || "sonnet"];
     const raw = await claude(model, ARCH_SYSTEM, prompt);
     const spec = extractJson(raw);
     if (!spec || !Array.isArray(spec.pages) || !spec.pages.length) throw new Error("Model returned an invalid architecture");
+    if (spec.brand && typeof spec.brand === "object") pendingBrand = spec.brand;
     return assembleProject(String(spec.name || deriveName(prompt)), prompt, spec.pages.map((pg: any) => ({ name: String(pg.name || "Page"), sections: Array.isArray(pg.sections) ? pg.sections.map((s: any) => ({ name: String(s.name || "Section"), need: s.need ? String(s.need) : undefined })) : [] })), Array.isArray(spec.tables) ? spec.tables.map((t: any) => ({ name: String(t.name || "Table"), fields: String(t.fields || "") })) : [], Array.isArray(spec.actions) ? spec.actions.map((a: any) => ({ name: String(a.name || "Action"), trigger: a.trigger ? String(a.trigger) : "Manual", steps: Array.isArray(a.steps) ? a.steps.map((s: any) => ({ label: String(s.label || "Step"), kind: s.kind })) : [] })) : [], Array.isArray(spec.tools) ? spec.tools.map((t: any) => String(t)) : ["Search"], Array.isArray(spec.connections) ? spec.connections : []);
   }
 
@@ -233,12 +248,14 @@ Rules: IDs must come from the given tree. Use the selected element when the inst
           const k = node(cap(String(o.label || "New " + t)), t, o.need ? String(o.need) : "", o.how ? String(o.how) : "Added by Claude.");
           parent.children.push(k); open.add(parent.id); sel = k.id; expandTo(k.id);
           const pg = pageOf(k); if (pg) curPage = pg.id;
+          touchPage(k);
           applied++;
         } else if (o.op === "rename") {
-          const n = find(tree, o.id); if (n) { n.label = cap(String(o.label || n.label)); applied++; }
+          const n = find(tree, o.id); if (n) { n.label = cap(String(o.label || n.label)); touchPage(n); applied++; }
         } else if (o.op === "delete") {
           const n = find(tree, o.id);
           if (n && n.id !== tree.id) {
+            touchPage(n);
             const p = findParent(tree, n.id);
             p.children = p.children.filter((c: any) => c.id !== n.id);
             const dead = new Set(allNodes(n).map((x) => x.id));
@@ -247,15 +264,15 @@ Rules: IDs must come from the given tree. Use the selected element when the inst
             applied++;
           }
         } else if (o.op === "color") {
-          const n = find(tree, o.id); if (n && COLORS[o.color]) { n.color = o.color; applied++; }
+          const n = find(tree, o.id); if (n && COLORS[o.color]) { n.color = o.color; touchPage(n); applied++; }
         } else if (o.op === "need") {
-          const n = find(tree, o.id); if (n) { n.need = String(o.text || ""); applied++; }
+          const n = find(tree, o.id); if (n) { n.need = String(o.text || ""); touchPage(n); applied++; }
         } else if (o.op === "how") {
           const n = find(tree, o.id); if (n) { n.how = String(o.text || ""); applied++; }
         } else if (o.op === "trigger") {
           const n = find(tree, o.id); if (n) { n.trigger = String(o.text || "Manual"); applied++; }
         } else if (o.op === "note") {
-          const n = find(tree, o.id); if (n) { n.notes.push(String(o.text || "")); applied++; }
+          const n = find(tree, o.id); if (n) { n.notes.push(String(o.text || "")); touchPage(n); applied++; }
         } else if (o.op === "connect") {
           const a = find(tree, o.from), b = find(tree, o.to);
           if (a && b && a.id !== b.id) { conns.push({ from: a.id, to: b.id, type: ["nav", "data", "event"].indexOf(o.type) > -1 ? o.type : "nav", label: o.label ? String(o.label) : "" }); applied++; }
@@ -268,6 +285,97 @@ Rules: IDs must come from the given tree. Use the selected element when the inst
     }
     return applied;
   }
+
+  /* ---------------- real site generation (live preview) ---------------- */
+  function touchPage(n: any) {
+    if (!n || !tree) return;
+    const pg = pageOf(n);
+    if (pg && pg.html) pg.stale = true;
+  }
+  function extractHtml(text: string): string {
+    let c = text.trim();
+    const fence = c.match(/```(?:html)?\s*([\s\S]*?)```/);
+    if (fence) c = fence[1].trim();
+    const start = c.search(/<!DOCTYPE|<html/i);
+    if (start === -1) throw new Error("Model returned no HTML");
+    return c.slice(start);
+  }
+  const NAV_SCRIPT = '<script>document.addEventListener("click",function(e){var a=e.target&&e.target.closest?e.target.closest("a[data-page]"):null;if(a){e.preventDefault();parent.postMessage({devgriNav:a.getAttribute("data-page")},"*");}});</' + "script>";
+  function injectNav(html: string): string {
+    return html.indexOf("</body>") > -1 ? html.replace("</body>", NAV_SCRIPT + "</body>") : html + NAV_SCRIPT;
+  }
+  function pageContext(pg: any): string {
+    const pagesC = cluster("pages");
+    return JSON.stringify({
+      site: tree.label,
+      about: tree.need,
+      brand: tree.brand || { primary: "#4f46b8", font: "Inter", vibe: "clean, modern, confident" },
+      pages: pagesC.children.map((p: any) => p.label),
+      currentPage: pg.label,
+      sections: pg.children.map((s: any) => ({ name: s.label, need: s.need, notes: s.notes, color: s.color || undefined })),
+    });
+  }
+  async function buildPage(pg: any, announce?: boolean) {
+    if (!pg) return;
+    if (!settings.apiKey) { toast("Add your Anthropic key in AI settings to build the real site"); $("setmodal").style.display = "flex"; return; }
+    if (building) { toast("Already building a page — one moment"); return; }
+    building = true;
+    updateBuildBtn(pg);
+    if (announce !== false) addMsg("ai", "Building <b>" + esc(pg.label) + "</b> for real with <b>" + esc(PROVIDERS[pickFor("front") || "sonnet"]) + "</b>…");
+    typing(true);
+    try {
+      const model = MODEL_IDS[pickFor("front") || "sonnet"];
+      const raw = await claude(model, PAGE_SYSTEM, pageContext(pg));
+      pg.html = injectNav(extractHtml(raw));
+      pg.stale = false;
+      typing(false);
+      addMsg("ai", "✓ <b>" + esc(pg.label) + "</b> built — this is real generated code, not a template. Click around, or tell me what to change and press Rebuild.");
+      pvMode = "live";
+      renderPreview();
+      toast(pg.label + " built ✓");
+    } catch (err: any) {
+      typing(false);
+      addMsg("ai", '<span style="color:var(--text-danger)">Page build failed: ' + esc(err?.message || "unknown error") + "</span> — press Build to retry.");
+    }
+    building = false;
+    updateBuildBtn(pg);
+  }
+  function updateBuildBtn(pg: any) {
+    const b = $("pBuild"), t = $("pBuildTxt");
+    if (!b || !t) return;
+    if (building) { t.textContent = "Building…"; (b as HTMLButtonElement).disabled = true; return; }
+    (b as HTMLButtonElement).disabled = false;
+    if (!pg) { t.textContent = "Build page with Claude"; return; }
+    t.textContent = !pg.html ? "Build “" + pg.label + "” with Claude" : pg.stale ? "Rebuild “" + pg.label + "” (changes pending)" : "Rebuild “" + pg.label + "”";
+  }
+  function renderLive() {
+    const pg = curPage != null ? find(tree, curPage) : null;
+    const live = $("siteLive"), blue = $("site"), tabs = $("livetabs");
+    const showLive = pvMode === "live";
+    blue.style.display = showLive ? "none" : "block";
+    live.style.display = showLive ? "block" : "none";
+    tabs.style.display = showLive ? "flex" : "none";
+    updateBuildBtn(pg);
+    if (!showLive) return;
+    const pagesC = cluster("pages");
+    tabs.innerHTML = pagesC.children.map((p: any) => '<button data-ltab="' + p.id + '" style="font-size:12px;border:1px solid var(--border);background:' + (p.id === curPage ? "var(--fill-accent)" : "var(--surface-2)") + ";color:" + (p.id === curPage ? "#fff" : "var(--text-secondary)") + ';border-radius:14px;padding:4px 11px;">' + esc(p.label) + (p.html ? "" : " ·") + "</button>").join("");
+    tabs.querySelectorAll("[data-ltab]").forEach((b: any) => (b.onclick = () => { curPage = +b.dataset.ltab; const p2 = find(tree, curPage); renderPreview(); if (p2 && !p2.html) buildPage(p2); }));
+    const frame = $("siteFrame") as HTMLIFrameElement;
+    if (pg && pg.html) {
+      const key = pg.id + ":" + pg.html.length;
+      if (key !== lastFrameKey) { lastFrameKey = key; frame.srcdoc = pg.html; }
+    } else {
+      lastFrameKey = "";
+      frame.srcdoc = '<html><body style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:system-ui;color:#96948c;background:#fafaf8;"><div style="text-align:center;max-width:420px;padding:20px;"><div style="font-size:34px;">✦</div><p style="font-size:15px;color:#555;margin:8px 0 4px;font-weight:600;">' + esc(pg ? pg.label : "This page") + " isn’t built yet</p><p style=\"font-size:13px;line-height:1.6;\">Press <b>Build with Claude</b> above — Claude will write this page’s real HTML from your architecture.</p></div></body></html>";
+    }
+  }
+  window.addEventListener("message", (e: MessageEvent) => {
+    const p = e.data && (e.data as any).devgriNav;
+    if (!p || !tree) return;
+    const pagesC = cluster("pages");
+    const pg = pagesC.children.find((x: any) => x.label.toLowerCase() === String(p).toLowerCase());
+    if (pg) { curPage = pg.id; renderPreview(); if (!pg.html) buildPage(pg); }
+  });
 
   /* ---------------- chat ---------------- */
   function addMsg(role: string, html: string) {
@@ -310,6 +418,7 @@ Rules: IDs must come from the given tree. Use the selected element when the inst
     if (!g) g = genProject(prompt);
     uid = 0; allNodes(g.root).forEach((n: any) => (uid = Math.max(uid, n.id + 1)));
     tree = g.root; conns = g.cs;
+    if (pendingBrand) { tree.brand = pendingBrand; pendingBrand = null; }
     open = new Set([tree.id, cluster("pages").id]);
     sel = tree.id; curPage = g.pageNodes.length ? g.pageNodes[0].id : null;
     $("pnameTxt").textContent = tree.label;
@@ -318,8 +427,13 @@ Rules: IDs must come from the given tree. Use the selected element when the inst
     await ai("Architecture created:<br>• <b>" + g.pageNodes.length + " pages</b> — " + esc(pgs) + "<br>• menu wired to pages (purple dashed = navigation)<br>• <b>database</b>: " + esc(cluster("datas").children.map((t: any) => t.label).join(", ") || "—") + " (teal dashed = data)<br>• <b>logic</b>: " + esc(cluster("logics").children.map((t: any) => t.label).join(", ") || "—") + " (orange dashed = event)<br>• tools: " + esc(cluster("tools").children.map((t: any) => t.label).join(", ") || "—"), 1200);
     await ai(routeSummary(), 900);
     await ai("Now building the project preview…", 800);
+    pvMode = "live";
     setView("preview");
-    await ai("<b>Done!</b> Your project is ready. Try this:<br>• click any block in the <b>Preview</b> — it gets selected in the <b>Tree</b> too<br>• with something selected, just tell me what to change: <i>“make it blue”, “add testimonials”, “rename to Our story”, “connect to Contact”</i><br>• select an action under <b>Logic</b> and press <b>Test run</b> to watch the automation execute<br>• press <b>Save</b> to keep this project on your account", 1100);
+    await ai("<b>Done!</b> Your project is ready. Try this:<br>• <b>Live site</b> shows the real generated website; <b>Blueprint</b> shows the architecture blocks<br>• click any block in the <b>Blueprint</b> — it gets selected in the <b>Tree</b> too<br>• with something selected, just tell me what to change: <i>“make it blue”, “add testimonials”, “rename to Our story”, “connect to Contact”</i> — then <b>Rebuild</b> the page<br>• select an action under <b>Logic</b> and press <b>Test run</b> to watch the automation execute<br>• press <b>Save</b> to keep this project on your account", 1100);
+    if (settings.apiKey) {
+      const first = g.pageNodes.length ? g.pageNodes[0] : null;
+      if (first) await buildPage(first);
+    }
   }
   function newProject() {
     tree = null; conns = []; open = new Set(); sel = null; curPage = null; connectFrom = null;
@@ -354,9 +468,11 @@ Rules: IDs must come from the given tree. Use the selected element when the inst
       const k = node(cap(label), ct, "", "Added by prompt.");
       target.children.push(k); open.add(target.id); sel = k.id; expandTo(k.id);
       const pg = pageOf(k); if (pg) curPage = pg.id;
+      touchPage(k);
       renderAll();
       await ai("Added <b>" + esc(cap(label)) + "</b> (" + ct + ") inside <b>" + esc(target.label) + "</b>. It’s selected — describe what it needs.", 800);
     } else if (/^(delete|remove)\b/.test(t) && n && n.id !== tree.id) {
+      touchPage(n);
       const p = findParent(tree, n.id);
       p.children = p.children.filter((c: any) => c.id !== n.id);
       const dead = new Set(allNodes(n).map((x) => x.id));
@@ -364,7 +480,7 @@ Rules: IDs must come from the given tree. Use the selected element when the inst
       sel = p.id; renderAll();
       await ai("Deleted <b>" + esc(n.label) + "</b>.", 600);
     } else if ((m = t.match(/rename(?:\s+.*)?\s+to\s+(.+)/)) && n) {
-      const old = n.label; n.label = cap(m[1].trim()); renderAll();
+      const old = n.label; n.label = cap(m[1].trim()); touchPage(n); renderAll();
       await ai("Renamed <b>" + esc(old) + "</b> → <b>" + esc(n.label) + "</b>.", 600);
     } else if ((m = t.match(/connect(?:\s+(?:it|this))?(?:\s+to)?\s+(.+?)(?:\s+as\s+(nav|navigation|data|event))?$/)) && n) {
       const target = byLabel(m[1].trim());
@@ -374,10 +490,10 @@ Rules: IDs must come from the given tree. Use the selected element when the inst
         await ai("Connected <b>" + esc(n.label) + "</b> → <b>" + esc(target.label) + "</b> as <b>" + ctp + "</b>.", 800);
       } else await ai("I couldn’t find an element called “" + esc(m[1].trim()) + "”. Try the exact name from the tree.", 700);
     } else if ((m = t.match(/\b(blue|green|red|purple|pink|teal|amber|orange|gray|white)\b/)) && n) {
-      n.color = m[1]; renderAll();
+      n.color = m[1]; touchPage(n); renderAll();
       await ai("Made <b>" + esc(n.label) + "</b> " + m[1] + ". Check the preview.", 700);
     } else if (n) {
-      n.notes.push(text); renderAll();
+      n.notes.push(text); touchPage(n); renderAll();
       await ai("Applied to <b>" + esc(n.label) + "</b>: “" + esc(text) + '”.<br><span style="color:var(--text-muted);font-size:12px;">(Offline mode: saved as a build note. Add your Anthropic key in AI settings for real changes.)</span>', 900);
     } else {
       await ai('Select an element first (in the tree or the preview), then tell me what to change. Or say <i>“add page Pricing”</i>.', 700);
@@ -501,6 +617,7 @@ Rules: IDs must come from the given tree. Use the selected element when the inst
     }));
     root.querySelectorAll("#ptabs button").forEach((b: any) => (b.onclick = () => { curPage = +b.dataset.tab; select(+b.dataset.tab); }));
     root.querySelectorAll(".psec").forEach((el: any) => (el.onclick = () => select(+el.dataset.sec)));
+    renderLive();
   }
   function renderConnProps(p: HTMLElement) {
     const c = conns[selConn!], a = find(tree, c.from), b = find(tree, c.to);
@@ -550,9 +667,9 @@ Rules: IDs must come from the given tree. Use the selected element when the inst
       + "</div>"
       + (n.notes.length ? '<div class="sec"><label class="flabel" style="margin-top:0;">Build notes (' + n.notes.length + ")</label>" + n.notes.map((t: string) => '<div class="hint" style="margin-top:4px;">• ' + esc(t) + "</div>").join("") + "</div>" : "")
       + '<div class="sec hint" style="border-bottom:none;margin-top:auto;">Total elements: ' + count(tree) + "</div>";
-    ($("fN") as HTMLInputElement).oninput = (e: any) => { n.label = e.target.value; const s = root.querySelector('.node[data-id="' + n.id + '"] .lb'); if (s) s.textContent = n.label; };
+    ($("fN") as HTMLInputElement).oninput = (e: any) => { n.label = e.target.value; touchPage(n); const s = root.querySelector('.node[data-id="' + n.id + '"] .lb'); if (s) s.textContent = n.label; };
     ($("fN") as HTMLInputElement).onchange = () => renderAll();
-    ($("fD") as HTMLTextAreaElement).oninput = (e: any) => (n.need = e.target.value);
+    ($("fD") as HTMLTextAreaElement).oninput = (e: any) => { n.need = e.target.value; touchPage(n); };
     ($("fH") as HTMLTextAreaElement).oninput = (e: any) => (n.how = e.target.value);
     ($("fD") as HTMLTextAreaElement).onchange = () => renderPreview();
     const tg = $("fTrig"); if (tg) (tg as HTMLInputElement).oninput = (e: any) => { n.trigger = e.target.value; };
@@ -563,7 +680,7 @@ Rules: IDs must come from the given tree. Use the selected element when the inst
     p.querySelectorAll("[data-j]").forEach((el: any) => (el.onclick = () => select(+el.dataset.j)));
     p.querySelectorAll("[data-go]").forEach((el: any) => (el.onclick = () => select(+el.dataset.go)));
     p.querySelectorAll("[data-rm]").forEach((el: any) => (el.onclick = () => { snap(); conns.splice(+el.dataset.rm, 1); renderAll(); }));
-    p.querySelectorAll(".sw").forEach((el: any) => (el.onclick = () => { snap(); n.color = el.dataset.c; renderAll(); }));
+    p.querySelectorAll(".sw").forEach((el: any) => (el.onclick = () => { snap(); n.color = el.dataset.c; touchPage(n); renderAll(); }));
   }
   function nodeAdd(parent: any) {
     snap();
@@ -776,8 +893,11 @@ Rules: IDs must come from the given tree. Use the selected element when the inst
     const r = tv.getBoundingClientRect();
     panX = r.width / 2 - (nd.x + NW / 2) * scale; panY = r.height / 2 - (nd.y + NH / 2) * scale; tf();
   });
-  $("dDesk").onclick = () => { $("site").style.maxWidth = "860px"; $("dDesk").classList.add("on"); $("dMob").classList.remove("on"); };
-  $("dMob").onclick = () => { $("site").style.maxWidth = "390px"; $("dMob").classList.add("on"); $("dDesk").classList.remove("on"); };
+  $("dDesk").onclick = () => { $("site").style.maxWidth = "860px"; $("siteLive").style.maxWidth = "860px"; $("dDesk").classList.add("on"); $("dMob").classList.remove("on"); };
+  $("dMob").onclick = () => { $("site").style.maxWidth = "390px"; $("siteLive").style.maxWidth = "390px"; $("dMob").classList.add("on"); $("dDesk").classList.remove("on"); };
+  $("mBlue").onclick = () => { pvMode = "blueprint"; $("mBlue").classList.add("on"); $("mLive").classList.remove("on"); renderPreview(); };
+  $("mLive").onclick = () => { pvMode = "live"; $("mLive").classList.add("on"); $("mBlue").classList.remove("on"); renderPreview(); };
+  $("pBuild").onclick = () => { const pg = curPage != null ? find(tree, curPage) : null; if (pg) buildPage(pg); };
   $("bSet").onclick = () => { $("setmodal").style.display = "flex"; };
   $("setDone").onclick = applySettings;
   $("setClose").onclick = applySettings;
