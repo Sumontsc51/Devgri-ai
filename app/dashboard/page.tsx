@@ -35,6 +35,17 @@ import {
   FileText,
   Sparkles,
   Terminal,
+  Send,
+  MessageSquare,
+  Folder,
+  FolderOpen,
+  FileCode2,
+  ChevronRight,
+  ChevronDown,
+  ChevronLeft,
+  Trash2,
+  PanelRightClose,
+  PanelRightOpen,
 } from "lucide-react";
 
 const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
@@ -412,6 +423,287 @@ async function callClaude(
   return block?.text ?? "";
 }
 
+/* ------------------------------------------------------------------ */
+/* Builder chat (chat ⇄ architecture tree ⇄ canvas — one system)       */
+/* ------------------------------------------------------------------ */
+
+const MODELS = [
+  { id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5 (fast)" },
+  { id: "claude-sonnet-5", label: "Claude Sonnet 5 (balanced)" },
+  { id: "claude-opus-4-8", label: "Claude Opus 4.8 (strongest)" },
+];
+
+type ChatMessage = { role: "user" | "assistant"; content: string };
+
+type TreeNode = {
+  name: string;
+  kind: "folder" | "file";
+  note?: string;
+  children?: TreeNode[];
+};
+
+type WorkflowSpec = {
+  nodes: Array<{
+    id: string;
+    type: "input" | "masking" | "ai" | "output";
+    text?: string;
+    instruction?: string;
+    model?: string;
+  }>;
+  edges: Array<{ source: string; target: string }>;
+};
+
+const SYSTEM_PROMPT = `You are Devgri Builder, a software architecture assistant
+living inside a visual AI-workflow workspace. Each turn you maintain THREE
+things: a conversational reply, the project's architecture tree, and the
+executable node workflow shown on the user's canvas.
+
+Respond with ONLY a single raw JSON object — no markdown, no code fences:
+
+{"reply": "<plain-text answer>",
+ "tree": <TreeNode or null>,
+ "workflow": <Workflow or null>}
+
+TreeNode: {"name":"project","kind":"folder","note":"short purpose",
+ "children":[{"name":"app","kind":"folder","children":[
+   {"name":"page.tsx","kind":"file","note":"landing page"}]}]}
+
+Workflow: {"nodes":[{"id":"a","type":"input","text":"..."},
+  {"id":"b","type":"masking"},
+  {"id":"c","type":"ai","instruction":"...","model":"claude-haiku-4-5-20251001"},
+  {"id":"d","type":"output"}],
+ "edges":[{"source":"a","target":"b"},{"source":"b","target":"c"},
+  {"source":"c","target":"d"}]}
+
+Rules:
+- "tree" and "workflow" must each be COMPLETE when returned (never diffs).
+  Return null for one only when the conversation doesn't change it.
+- Evolve from the CURRENT STATE given in context; keep the user's earlier
+  decisions unless asked to change them.
+- Workflow node types: input, masking (PII scrub), ai, output. Never emit
+  apiKey nodes — the user manages keys themselves. ai model must be one of:
+  claude-haiku-4-5-20251001, claude-sonnet-5, claude-opus-4-8.
+- Data flows left→right along edges; a typical pipeline is
+  input → masking → ai → output. Keep workflows acyclic.
+- Keep tree "note" under 8 words. Keep replies to a few sentences and say
+  what you changed on the canvas and in the tree.`;
+
+function isTreeNode(v: unknown): v is TreeNode {
+  if (!v || typeof v !== "object") return false;
+  const n = v as TreeNode;
+  return (
+    typeof n.name === "string" &&
+    (n.kind === "folder" || n.kind === "file") &&
+    (n.children === undefined ||
+      (Array.isArray(n.children) && n.children.every(isTreeNode)))
+  );
+}
+
+function isWorkflowSpec(v: unknown): v is WorkflowSpec {
+  if (!v || typeof v !== "object") return false;
+  const w = v as WorkflowSpec;
+  return (
+    Array.isArray(w.nodes) &&
+    Array.isArray(w.edges) &&
+    w.nodes.every(
+      (n) =>
+        typeof n?.id === "string" &&
+        ["input", "masking", "ai", "output"].includes(n?.type)
+    ) &&
+    w.edges.every(
+      (e) => typeof e?.source === "string" && typeof e?.target === "string"
+    )
+  );
+}
+
+/** Tolerant parser: strips fences, extracts the outermost JSON object,
+ *  falls back to treating the whole text as the reply. */
+function parseBuilderJson(text: string): {
+  reply: string;
+  tree: TreeNode | null;
+  workflow: WorkflowSpec | null;
+} {
+  let candidate = text.trim();
+  const fence = candidate.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fence) candidate = fence[1].trim();
+  const start = candidate.indexOf("{");
+  const end = candidate.lastIndexOf("}");
+  if (start !== -1 && end > start) {
+    try {
+      const parsed = JSON.parse(candidate.slice(start, end + 1));
+      if (typeof parsed.reply === "string") {
+        return {
+          reply: parsed.reply,
+          tree: isTreeNode(parsed.tree) ? parsed.tree : null,
+          workflow: isWorkflowSpec(parsed.workflow) ? parsed.workflow : null,
+        };
+      }
+    } catch {
+      /* fall through */
+    }
+  }
+  return { reply: text.trim(), tree: null, workflow: null };
+}
+
+/** Lay a Claude-generated workflow out left→right by topological depth. */
+function layoutWorkflow(spec: WorkflowSpec): {
+  nodes: FlowNode[];
+  edges: Edge[];
+} {
+  const depth = new Map<string, number>();
+  spec.nodes.forEach((n) => depth.set(n.id, 0));
+  for (let i = 0; i < spec.nodes.length; i++) {
+    for (const e of spec.edges) {
+      if (!depth.has(e.source) || !depth.has(e.target)) continue;
+      depth.set(
+        e.target,
+        Math.max(depth.get(e.target)!, depth.get(e.source)! + 1)
+      );
+    }
+  }
+  const perColumn = new Map<number, number>();
+  const nodes: FlowNode[] = spec.nodes.map((n) => {
+    const d = depth.get(n.id) ?? 0;
+    const row = perColumn.get(d) ?? 0;
+    perColumn.set(d, row + 1);
+    return {
+      id: n.id,
+      type: n.type,
+      position: { x: 40 + d * 360, y: 60 + row * 300 },
+      data: {
+        ...(n.text !== undefined ? { text: n.text } : {}),
+        ...(n.instruction !== undefined ? { instruction: n.instruction } : {}),
+        ...(n.model !== undefined ? { model: n.model } : {}),
+      },
+    };
+  });
+  const ids = new Set(nodes.map((n) => n.id));
+  const edges: Edge[] = spec.edges
+    .filter((e) => ids.has(e.source) && ids.has(e.target))
+    .map((e, i) => ({
+      id: `e-${e.source}-${e.target}-${i}`,
+      source: e.source,
+      target: e.target,
+      animated: true,
+    }));
+  return { nodes, edges };
+}
+
+/** Compact summary of the canvas for Claude's context (keys excluded). */
+function describeCanvas(nodes: FlowNode[], edges: Edge[]): string {
+  const ns = nodes
+    .filter((n) => n.type !== "apiKey")
+    .map((n) => ({
+      id: n.id,
+      type: n.type,
+      ...(n.data.text ? { text: n.data.text.slice(0, 200) } : {}),
+      ...(n.data.instruction ? { instruction: n.data.instruction } : {}),
+      ...(n.data.model ? { model: n.data.model } : {}),
+    }));
+  const es = edges.map((e) => ({ source: e.source, target: e.target }));
+  return JSON.stringify({ nodes: ns, edges: es });
+}
+
+async function callClaudeChat(
+  apiKey: string,
+  model: string,
+  history: ChatMessage[],
+  system: string
+): Promise<string> {
+  const response = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-direct-browser-access": "true",
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 4096,
+      system,
+      messages: history.map((m) => ({ role: m.role, content: m.content })),
+    }),
+  });
+
+  if (!response.ok) {
+    let detail = `HTTP ${response.status}`;
+    try {
+      const err = await response.json();
+      detail = err?.error?.message ?? detail;
+    } catch {
+      /* keep HTTP status */
+    }
+    throw new Error(detail);
+  }
+
+  const json = await response.json();
+  const block = Array.isArray(json.content)
+    ? json.content.find((c: { type: string }) => c.type === "text")
+    : null;
+  return block?.text ?? "";
+}
+
+/* ------------------------------------------------------------------ */
+/* Architecture tree view                                              */
+/* ------------------------------------------------------------------ */
+
+function TreeItem({ node, depth }: { node: TreeNode; depth: number }) {
+  const [open, setOpen] = useState(depth < 2);
+  const isFolder = node.kind === "folder";
+  const hasChildren = isFolder && (node.children?.length ?? 0) > 0;
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => hasChildren && setOpen((o) => !o)}
+        className={`group flex w-full items-start gap-1.5 rounded-md px-1.5 py-1 text-left hover:bg-white/5 ${
+          hasChildren ? "cursor-pointer" : "cursor-default"
+        }`}
+        style={{ paddingLeft: `${depth * 14 + 6}px` }}
+      >
+        <span className="mt-0.5 w-3.5 shrink-0 text-gray-600">
+          {hasChildren ? (
+            open ? (
+              <ChevronDown className="h-3.5 w-3.5" />
+            ) : (
+              <ChevronRight className="h-3.5 w-3.5" />
+            )
+          ) : null}
+        </span>
+        {isFolder ? (
+          open && hasChildren ? (
+            <FolderOpen className="mt-0.5 h-3.5 w-3.5 shrink-0 text-indigo-400" />
+          ) : (
+            <Folder className="mt-0.5 h-3.5 w-3.5 shrink-0 text-indigo-400" />
+          )
+        ) : (
+          <FileCode2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-gray-500" />
+        )}
+        <span className="min-w-0">
+          <span
+            className={`break-all font-mono text-xs ${
+              isFolder ? "font-semibold text-gray-200" : "text-gray-300"
+            }`}
+          >
+            {node.name}
+          </span>
+          {node.note && (
+            <span className="ml-2 text-[10px] text-gray-600 group-hover:text-gray-500">
+              {node.note}
+            </span>
+          )}
+        </span>
+      </button>
+      {open &&
+        node.children?.map((child, i) => (
+          <TreeItem key={`${child.name}-${i}`} node={child} depth={depth + 1} />
+        ))}
+    </div>
+  );
+}
+
 export default function DashboardPage() {
   const router = useRouter();
   const [nodes, setNodes, onNodesChange] = useNodesState<NodeData>([]);
@@ -429,6 +721,24 @@ export default function DashboardPage() {
   const edgesRef = useRef<Edge[]>([]);
   nodesRef.current = nodes as FlowNode[];
   edgesRef.current = edges;
+
+  /* Builder chat + architecture tree (one system with the canvas) */
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [tree, setTree] = useState<TreeNode | null>(null);
+  const [chatInput, setChatInput] = useState("");
+  const [chatBusy, setChatBusy] = useState(false);
+  const [chatError, setChatError] = useState<string | null>(null);
+  const [chatModel, setChatModel] = useState(MODELS[1].id);
+  const [chatOpen, setChatOpen] = useState(true);
+  const [treeOpen, setTreeOpen] = useState(true);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    chatScrollRef.current?.scrollTo({
+      top: chatScrollRef.current.scrollHeight,
+      behavior: "smooth",
+    });
+  }, [messages, chatBusy]);
 
   const updateNodeData = useCallback(
     (id: string, patch: Record<string, unknown>) => {
@@ -696,6 +1006,63 @@ export default function DashboardPage() {
     router.replace("/login");
   }
 
+  /* Chat drives the tree AND the canvas — the BYOK key comes from an
+     API Key node on the canvas, same as workflow runs. */
+  async function handleChatSend(e?: React.FormEvent) {
+    e?.preventDefault();
+    const text = chatInput.trim();
+    if (!text || chatBusy) return;
+    const keyNode = nodesRef.current.find((n) => n.type === "apiKey");
+    const key = (keyNode?.data.apiKey ?? "").trim();
+    if (!key) {
+      setChatError(
+        "Add an API Key node on the canvas and paste your Anthropic key — it powers both the chat and workflow runs (session only)."
+      );
+      return;
+    }
+    setChatError(null);
+    setChatInput("");
+    const nextMessages: ChatMessage[] = [
+      ...messages,
+      { role: "user", content: text },
+    ];
+    setMessages(nextMessages);
+    setChatBusy(true);
+    try {
+      const system = `${SYSTEM_PROMPT}\n\nCURRENT TREE:\n${
+        tree ? JSON.stringify(tree) : "(none yet)"
+      }\n\nCURRENT CANVAS WORKFLOW:\n${describeCanvas(
+        nodesRef.current,
+        edgesRef.current
+      )}`;
+      const raw = await callClaudeChat(key, chatModel, nextMessages, system);
+      const parsed = parseBuilderJson(raw);
+      setMessages([
+        ...nextMessages,
+        { role: "assistant", content: parsed.reply },
+      ]);
+      if (parsed.tree) setTree(parsed.tree);
+      if (parsed.workflow && canWrite) {
+        const laid = layoutWorkflow(parsed.workflow);
+        /* keep the user's API Key nodes — Claude never touches keys */
+        const keyNodes = nodesRef.current
+          .filter((n) => n.type === "apiKey")
+          .map((n, i) => ({
+            ...n,
+            position: { x: 40, y: 420 + i * 240 },
+          }));
+        setNodes(withHandlers([...laid.nodes, ...keyNodes]));
+        setEdges(laid.edges);
+      }
+    } catch (err) {
+      setChatError(err instanceof Error ? err.message : "Request failed.");
+      setMessages(messages);
+      setChatInput(text);
+    } finally {
+      setChatBusy(false);
+    }
+  }
+
   if (booting) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-ink">
@@ -801,38 +1168,224 @@ export default function DashboardPage() {
         </div>
       )}
 
-      <div className="flex-1">
-        <ReactFlow
-          nodes={nodes}
-          edges={edges}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
-          onConnect={onConnect}
-          nodeTypes={nodeTypes}
-          nodesDraggable={canWrite}
-          nodesConnectable={canWrite}
-          elementsSelectable
-          fitView
-          proOptions={{ hideAttribution: false }}
-        >
-          <Background
-            variant={BackgroundVariant.Dots}
-            gap={22}
-            size={1}
-            color="#23232f"
-          />
-          <Controls
-            position="bottom-left"
-            className="!border-line !bg-panel [&>button]:!border-line [&>button]:!bg-panel [&>button]:!text-gray-400"
-          />
-          <MiniMap
-            pannable
-            zoomable
-            className="!border !border-line !bg-panel"
-            nodeColor="#4f46b8"
-            maskColor="rgba(10,10,15,0.7)"
-          />
-        </ReactFlow>
+      <div className="flex min-h-0 flex-1">
+        {/* Build-with-Claude chat panel */}
+        {chatOpen ? (
+          <section className="flex w-[320px] shrink-0 flex-col border-r border-line bg-panel/50">
+            <div className="flex shrink-0 items-center justify-between border-b border-line px-3 py-2">
+              <div className="flex items-center gap-2">
+                <MessageSquare className="h-4 w-4 text-indigo-400" />
+                <h2 className="text-xs font-semibold text-white">
+                  Build with Claude
+                </h2>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <select
+                  value={chatModel}
+                  onChange={(e) => setChatModel(e.target.value)}
+                  className="max-w-[110px] rounded-md border border-line bg-ink px-1.5 py-1 text-[10px] text-gray-300 outline-none focus:border-indigo-500"
+                >
+                  {MODELS.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => setChatOpen(false)}
+                  className="text-gray-600 hover:text-gray-300"
+                  aria-label="Collapse chat"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+
+            <div
+              ref={chatScrollRef}
+              className="min-h-0 flex-1 overflow-y-auto p-3"
+            >
+              {messages.length === 0 && (
+                <div className="mt-10 px-2 text-center">
+                  <Sparkles className="mx-auto mb-2 h-5 w-5 text-indigo-400" />
+                  <p className="text-xs leading-relaxed text-gray-500">
+                    Describe what you want to build. Claude drafts the
+                    architecture tree (right) and wires the workflow onto the
+                    canvas — then keeps everything in sync as you iterate.
+                  </p>
+                  <p className="mt-3 text-[10px] text-gray-600">
+                    Uses the key from your API Key node. BYOK: messages go from
+                    this browser straight to Anthropic — never through Devgri.
+                  </p>
+                </div>
+              )}
+              <div className="space-y-2.5">
+                {messages.map((m, i) => (
+                  <div
+                    key={i}
+                    className={`flex ${
+                      m.role === "user" ? "justify-end" : "justify-start"
+                    }`}
+                  >
+                    <div
+                      className={`max-w-[90%] whitespace-pre-wrap break-words rounded-xl px-3 py-2 text-xs leading-relaxed ${
+                        m.role === "user"
+                          ? "rounded-br-sm bg-indigo-600 text-white"
+                          : "rounded-bl-sm border border-line bg-panel text-gray-200"
+                      }`}
+                    >
+                      {m.content}
+                    </div>
+                  </div>
+                ))}
+                {chatBusy && (
+                  <div className="flex items-center gap-2 rounded-xl border border-line bg-panel px-3 py-2">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-400" />
+                    <span className="text-[11px] text-gray-500">
+                      Claude is thinking…
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {chatError && (
+              <p className="mx-3 mb-2 rounded-md border border-red-500/30 bg-red-500/10 px-2.5 py-1.5 text-[11px] text-red-300">
+                {chatError}
+              </p>
+            )}
+
+            <form
+              onSubmit={handleChatSend}
+              className="flex shrink-0 items-end gap-1.5 border-t border-line p-2.5"
+            >
+              <textarea
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    handleChatSend();
+                  }
+                }}
+                rows={2}
+                placeholder="Describe your app or a change…"
+                className="min-h-[40px] flex-1 resize-none rounded-lg border border-line bg-ink px-2.5 py-2 text-xs text-gray-200 placeholder-gray-600 outline-none focus:border-indigo-500"
+              />
+              <button
+                type="submit"
+                disabled={chatBusy || !chatInput.trim()}
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-indigo-600 text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-40"
+                aria-label="Send"
+              >
+                {chatBusy ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Send className="h-3.5 w-3.5" />
+                )}
+              </button>
+            </form>
+          </section>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setChatOpen(true)}
+            className="flex w-9 shrink-0 flex-col items-center gap-2 border-r border-line bg-panel/50 pt-3 text-gray-500 hover:text-indigo-300"
+            aria-label="Open chat"
+          >
+            <MessageSquare className="h-4 w-4" />
+          </button>
+        )}
+
+        {/* Canvas */}
+        <div className="min-w-0 flex-1">
+          <ReactFlow
+            nodes={nodes}
+            edges={edges}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            onConnect={onConnect}
+            nodeTypes={nodeTypes}
+            nodesDraggable={canWrite}
+            nodesConnectable={canWrite}
+            elementsSelectable
+            fitView
+            proOptions={{ hideAttribution: false }}
+          >
+            <Background
+              variant={BackgroundVariant.Dots}
+              gap={22}
+              size={1}
+              color="#23232f"
+            />
+            <Controls
+              position="bottom-left"
+              className="!border-line !bg-panel [&>button]:!border-line [&>button]:!bg-panel [&>button]:!text-gray-400"
+            />
+            <MiniMap
+              pannable
+              zoomable
+              className="!border !border-line !bg-panel"
+              nodeColor="#4f46b8"
+              maskColor="rgba(10,10,15,0.7)"
+            />
+          </ReactFlow>
+        </div>
+
+        {/* Architecture tree panel */}
+        {treeOpen ? (
+          <aside className="flex w-[280px] shrink-0 flex-col border-l border-line bg-panel/50">
+            <div className="flex shrink-0 items-center justify-between border-b border-line px-3 py-2">
+              <div className="flex items-center gap-2">
+                <Folder className="h-4 w-4 text-indigo-400" />
+                <h2 className="text-xs font-semibold text-white">
+                  Architecture tree
+                </h2>
+              </div>
+              <div className="flex items-center gap-2">
+                {tree && (
+                  <button
+                    type="button"
+                    onClick={() => setTree(null)}
+                    className="text-gray-600 hover:text-red-300"
+                    aria-label="Clear tree"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setTreeOpen(false)}
+                  className="text-gray-600 hover:text-gray-300"
+                  aria-label="Collapse tree"
+                >
+                  <PanelRightClose className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-2">
+              {tree ? (
+                <TreeItem node={tree} depth={0} />
+              ) : (
+                <p className="px-3 py-6 text-center text-xs leading-relaxed text-gray-600">
+                  No architecture yet. Describe your project in the chat and
+                  Claude will draft the tree here, then update it as you
+                  iterate.
+                </p>
+              )}
+            </div>
+          </aside>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setTreeOpen(true)}
+            className="flex w-9 shrink-0 flex-col items-center gap-2 border-l border-line bg-panel/50 pt-3 text-gray-500 hover:text-indigo-300"
+            aria-label="Open tree"
+          >
+            <PanelRightOpen className="h-4 w-4" />
+          </button>
+        )}
       </div>
     </main>
   );
