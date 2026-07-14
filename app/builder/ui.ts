@@ -118,7 +118,8 @@ export const BUILDER_CSS = `
 #toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--text-primary);color:var(--surface-2);font-size:13px;padding:8px 16px;border-radius:8px;opacity:0;transition:opacity .25s;pointer-events:none;z-index:20;}
 #toast.show{opacity:1;}
 .hint{font-size:12px;color:var(--text-muted);line-height:1.6;}
-@media (max-width:900px){ #chat{width:250px;} #props{width:240px;} }
+#tokbar{left:332px;}
+@media (max-width:900px){ #chat{width:250px;} #props{width:240px;} #tokbar{left:262px;} }
 `;
 
 export const BUILDER_HTML = `
@@ -151,6 +152,7 @@ export const BUILDER_HTML = `
       <button id="vPrev"><i class="ti ti-eye" style="font-size:14px"></i> Preview</button>
     </div>
     <button id="bUndo" title="Undo last change"><i class="ti ti-arrow-back-up" style="font-size:15px"></i> Undo</button>
+    <span id="savewarn" style="display:none;align-items:center;gap:5px;font-size:11px;color:var(--text-danger);background:var(--bg-danger);border:1px solid var(--border-danger);border-radius:8px;padding:4px 10px;margin-left:8px;"></span>
     <span style="flex:1"></span>
     <button id="bExport" title="Download the built site as a .zip"><i class="ti ti-download" style="font-size:15px"></i> Export</button>
     <button id="bSave" title="Save project to your account"><i class="ti ti-device-floppy" style="font-size:15px"></i> <span id="bSaveTxt">Save</span></button>
@@ -221,7 +223,7 @@ export const BUILDER_HTML = `
   </div>
 </div>
 <div id="toast" role="status"></div>
-<div id="tokbar" style="display:none;position:fixed;bottom:12px;left:12px;z-index:12;font-size:10.5px;color:var(--text-muted);background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:4px 9px;box-shadow:var(--shadow);cursor:pointer;user-select:none;" title="Session token usage (estimated)">
+<div id="tokbar" style="display:none;position:fixed;bottom:12px;z-index:12;font-size:10.5px;color:var(--text-muted);background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:4px 9px;box-shadow:var(--shadow);cursor:pointer;user-select:none;" title="Session token usage (estimated)">
   <span id="tokline"></span>
   <div id="tokdetail" style="display:none;margin-top:5px;line-height:1.7;"></div>
 </div>

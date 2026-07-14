@@ -73,7 +73,7 @@ export function initBuilder(root: HTMLElement, handles: BuilderHandles): void {
   function routeSummary() {
     if (!hasAnyKey()) return "No API keys connected — running in <b>offline demo mode</b>. Add an Anthropic, OpenAI, or Google key in AI settings (gear icon) to design with real AI.";
     const provs = (["anthropic", "openai", "google"] as Provider[]).filter((p) => settings.keys[p]).map((p) => PROVIDER_LABEL[p]).join(", ");
-    return "Model routing (" + (settings.mode === "manual" ? "your hardcoded mapping" : "auto — best available per task") + "):<br>• frontend → <b>" + MODELS[pickFor("front")!].label + "</b><br>• backend and logic → <b>" + MODELS[pickFor("back")!].label + "</b><br>• images and UI → <b>" + MODELS[pickFor("media")!].label + "</b><br>Keys connected: " + provs + ". All calls go browser-direct to the provider — never through Devgri.";
+    return "Model routing (" + (settings.mode === "manual" ? "your hardcoded mapping" : "auto — best available per task") + "):<br>• frontend → <b>" + MODELS[pickFor("front")!].label + "</b><br>• backend and logic → <b>" + MODELS[pickFor("back")!].label + "</b><br>• images and UI → <b>" + MODELS[pickFor("media")!].label + "</b><br>Keys connected: " + provs + ". All calls go browser-direct to the provider — never through Devgri. PII masking is on: emails, phone numbers and secret tokens are scrubbed client-side before any prompt leaves your browser.";
   }
 
   function node(label: string, type: string, need?: string, how?: string, children?: any[]): any { return { id: uid++, label, type, need: need || "", how: how || "", color: "", notes: [], children: children || [] }; }
@@ -129,19 +129,25 @@ export function initBuilder(root: HTMLElement, handles: BuilderHandles): void {
       return block?.text ?? "";
     }
     if (def.provider === "openai") {
-      const response = await fetch(OPENAI_URL, {
+      const call = async (tokParam: Record<string, number>) => fetch(OPENAI_URL, {
         method: "POST",
         headers: { "content-type": "application/json", authorization: "Bearer " + key },
-        body: JSON.stringify({ model: def.id, max_tokens: 8192, messages: [{ role: "system", content: system }, { role: "user", content: userText }] }),
+        body: JSON.stringify({ model: def.id, ...tokParam, messages: [{ role: "system", content: system }, { role: "user", content: userText }] }),
       });
+      let response = await call({ max_completion_tokens: 8192 });
+      if (!response.ok) {
+        /* older models reject max_completion_tokens; retry with the legacy param */
+        let msg = ""; try { msg = JSON.stringify(await response.clone().json()); } catch { /* ignore */ }
+        if (/max_completion_tokens|max_tokens/i.test(msg)) response = await call({ max_tokens: 8192 });
+      }
       const json = await parseOrThrow(response);
       trackUsage(modelKey, json.usage?.prompt_tokens || 0, json.usage?.completion_tokens || 0);
       return json.choices?.[0]?.message?.content ?? "";
     }
-    /* google */
-    const response = await fetch(GOOGLE_URL + def.id + ":generateContent?key=" + encodeURIComponent(key), {
+    /* google — key goes in a header, never in the URL */
+    const response = await fetch(GOOGLE_URL + def.id + ":generateContent", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", "x-goog-api-key": key },
       body: JSON.stringify({ system_instruction: { parts: [{ text: system }] }, contents: [{ role: "user", parts: [{ text: userText }] }], generationConfig: { maxOutputTokens: 8192 } }),
     });
     const json = await parseOrThrow(response);
@@ -157,13 +163,15 @@ export function initBuilder(root: HTMLElement, handles: BuilderHandles): void {
     }
     return response.json();
   }
-  /* Retry-and-repair: one retry with the parse error fed back to the model. */
+  /* Retry-and-repair: one retry with the parse error fed back to the model.
+     All outgoing text is PII-masked (emails, phones, secret tokens) client-side. */
   async function callAndParse<T>(modelKey: string, system: string, userText: string, parse: (raw: string) => T): Promise<T> {
+    const masked = maskText(userText);
     try {
-      return parse(await callModel(modelKey, system, userText));
+      return parse(await callModel(modelKey, system, masked));
     } catch (firstErr: any) {
       const note = "\n\nIMPORTANT: your previous reply was invalid (" + String(firstErr?.message || firstErr) + "). Respond again following the required output format EXACTLY.";
-      return parse(await callModel(modelKey, system, userText + note));
+      return parse(await callModel(modelKey, system, masked + note));
     }
   }
 
@@ -410,11 +418,12 @@ Rules: IDs must come from the given tree. Use the selected element when the inst
   function reconcilePage(pg: any, secs: any[]) {
     if (!Array.isArray(secs) || !secs.length) return false;
     snap();
+    const oldKids = pg.children;
     const usedS = new Set<number>();
     pg.children = secs.map((s: any) => {
       const nameS = String(s.name || "Section"), lowS = nameS.toLowerCase();
-      let ex = pg.children.find((c: any) => !usedS.has(c.id) && c.label.toLowerCase() === lowS)
-        || pg.children.find((c: any) => !usedS.has(c.id) && (c.label.toLowerCase().includes(lowS) || lowS.includes(c.label.toLowerCase())));
+      let ex = oldKids.find((c: any) => !usedS.has(c.id) && c.label.toLowerCase() === lowS)
+        || oldKids.find((c: any) => !usedS.has(c.id) && (c.label.toLowerCase().includes(lowS) || lowS.includes(c.label.toLowerCase())));
       if (!ex) ex = node(cap(nameS), "section", "", "Rendered as a block inside its page.");
       else ex.label = cap(nameS);
       usedS.add(ex.id);
@@ -431,8 +440,22 @@ Rules: IDs must come from the given tree. Use the selected element when the inst
           usedE.add(ee.id);
           return ee;
         });
+        oldEls.forEach((c: any) => {
+          if (usedE.has(c.id)) return;
+          const hasConn = conns.some((k) => k.from === c.id || k.to === c.id);
+          if (c.children.length || c.notes.length || hasConn) ex.children.push(c);
+        });
       }
       return ex;
+    });
+    /* Keep unreported old sections that carry user structure or connections —
+       weaker models sometimes omit sections they did in fact render. */
+    const connected = new Set<number>();
+    conns.forEach((c) => { connected.add(c.from); connected.add(c.to); });
+    oldKids.forEach((c: any) => {
+      if (usedS.has(c.id)) return;
+      const hasConn = allNodes(c).some((x: any) => connected.has(x.id));
+      if (c.children.length || c.notes.length || hasConn) pg.children.push(c);
     });
     /* prune connections and selection that pointed at removed nodes */
     const alive = new Set(allNodes(tree).map((n: any) => n.id));
@@ -1008,6 +1031,12 @@ Under 220 lines.`;
   let autosaveTimer: any = null;
   let saving = false;
   function setSaveLabel(t: string) { const el = $("bSaveTxt"); if (el) el.textContent = t; }
+  function setSaveWarn(msg: string | null) {
+    const el = $("savewarn");
+    if (!el) return;
+    if (msg) { el.textContent = "⚠ " + msg; el.style.display = "inline-flex"; }
+    else el.style.display = "none";
+  }
   async function doSave(silent?: boolean) {
     if (!tree) { if (!silent) toast("Nothing to save yet"); return; }
     if (saving) return;
@@ -1018,9 +1047,11 @@ Under 220 lines.`;
     saving = false;
     if (r.error) {
       setSaveLabel("Save");
+      setSaveWarn("Not saved — " + r.error);
       if (!silent) toast("Save failed: " + r.error);
       return;
     }
+    setSaveWarn(null);
     if (r.id) {
       if (!currentProjectId) handles.projects.unshift({ id: r.id, name: tree.label, data: clean });
       currentProjectId = r.id;
@@ -1069,13 +1100,19 @@ Under 220 lines.`;
       const JSZip = (window as any).JSZip;
       const zip = new JSZip();
       const fileOf = (p: any) => (p.id === pages[0].id ? "index.html" : slugOf(p.label) + ".html");
+      const fileByLabel: Record<string, string> = {};
+      pages.forEach((q: any) => (fileByLabel[q.label.toLowerCase()] = fileOf(q)));
       built.forEach((p: any) => {
-        let html = p.html.split(NAV_SCRIPT).join("");
-        pages.forEach((q: any) => {
-          html = html.split('href="#" data-page="' + q.label + '"').join('href="' + fileOf(q) + '"');
-          html = html.split("href='#' data-page='" + q.label + "'").join('href="' + fileOf(q) + '"');
+        const src = p.html.split(NAV_SCRIPT).join("");
+        /* DOM-based link rewiring — robust to attribute order and extra attrs */
+        const doc = new DOMParser().parseFromString(src, "text/html");
+        doc.querySelectorAll("a[data-page]").forEach((a) => {
+          const target = (a.getAttribute("data-page") || "").toLowerCase();
+          const file = fileByLabel[target];
+          if (file) a.setAttribute("href", file);
+          a.removeAttribute("data-page");
         });
-        zip.file(fileOf(p), html);
+        zip.file(fileOf(p), "<!DOCTYPE html>\n" + doc.documentElement.outerHTML);
       });
       zip.file("README.txt", tree.label + "\nExported from Devgri AI Builder.\nOpen index.html in a browser, or upload the folder to any static host (Vercel, Netlify, GitHub Pages).\n");
       const blob = await zip.generateAsync({ type: "blob" });
@@ -1098,7 +1135,7 @@ Under 220 lines.`;
     if (!el) return;
     const provs = (["anthropic", "openai", "google"] as Provider[]).filter((p) => settings.keys[p]).map((p) => PROVIDER_LABEL[p]);
     el.innerHTML = provs.length ? provs.join(" + ") + ' connected — designs are real. <b id="p0keySet">Manage keys</b>' : 'No API keys — offline demo mode. <b id="p0keySet">Add keys</b>';
-    const set = $("p0keySet"); if (set) set.onclick = () => { $("setmodal").style.display = "flex"; };
+    const set = $("p0keySet"); if (set) set.onclick = () => { populateSettingsModal(); $("setmodal").style.display = "flex"; };
   }
   function buildModelSelects() {
     const groups: Record<string, string[]> = { anthropic: [], openai: [], google: [] };
@@ -1109,6 +1146,33 @@ Under 220 lines.`;
     ($("sBack") as HTMLSelectElement).value = settings.manual.back;
     ($("sMedia") as HTMLSelectElement).value = settings.manual.media;
   }
+  function populateSettingsModal() {
+    ($("kKeyAnthropic") as HTMLInputElement).value = settings.keys.anthropic;
+    ($("kKeyOpenai") as HTMLInputElement).value = settings.keys.openai;
+    ($("kKeyGoogle") as HTMLInputElement).value = settings.keys.google;
+    ($("mAuto") as HTMLInputElement).checked = settings.mode !== "manual";
+    ($("mMan") as HTMLInputElement).checked = settings.mode === "manual";
+    const man = settings.mode === "manual";
+    $("manrows").style.opacity = man ? "1" : ".45"; $("manrows").style.pointerEvents = man ? "auto" : "none";
+    ($("sFront") as HTMLSelectElement).value = settings.manual.front;
+    ($("sBack") as HTMLSelectElement).value = settings.manual.back;
+    ($("sMedia") as HTMLSelectElement).value = settings.manual.media;
+  }
+  function persistSettings() {
+    /* sessionStorage: survives refresh in this tab, cleared when the tab closes.
+       Never sent to Devgri servers. */
+    try { sessionStorage.setItem("devgri.builder.settings", JSON.stringify(settings)); } catch { /* private mode */ }
+  }
+  function loadSettings() {
+    try {
+      const raw = sessionStorage.getItem("devgri.builder.settings");
+      if (!raw) return;
+      const s = JSON.parse(raw);
+      if (s && s.keys) { settings.keys = { anthropic: s.keys.anthropic || "", openai: s.keys.openai || "", google: s.keys.google || "" }; }
+      if (s && s.mode) settings.mode = s.mode;
+      if (s && s.manual) settings.manual = { ...settings.manual, ...s.manual };
+    } catch { /* ignore corrupt state */ }
+  }
   function applySettings() {
     settings.keys = {
       anthropic: ($("kKeyAnthropic") as HTMLInputElement).value.trim(),
@@ -1117,6 +1181,7 @@ Under 220 lines.`;
     };
     settings.mode = ($("mMan") as HTMLInputElement).checked ? "manual" : "auto";
     settings.manual = { front: ($("sFront") as HTMLSelectElement).value, back: ($("sBack") as HTMLSelectElement).value, media: ($("sMedia") as HTMLSelectElement).value };
+    persistSettings();
     $("setmodal").style.display = "none";
     refreshKeyHint();
     if (tree) { renderProps(); addMsg("ai", routeSummary()); }
@@ -1128,12 +1193,16 @@ Under 220 lines.`;
   root.querySelectorAll(".chips button").forEach((b: any) => (b.onclick = () => { ($("p0") as HTMLTextAreaElement).value = b.dataset.ex; $("go").click(); }));
   $("vTree").onclick = () => setView("tree");
   $("vPrev").onclick = () => setView("preview");
-  $("bNew").onclick = () => { if (confirm("Start a new project? The current one will be discarded (save first if you want to keep it).")) newProject(); };
+  $("bNew").onclick = () => { if (confirm("Start a new project? Your current one stays saved under “Your saved projects”.")) { doSave(true); newProject(); } };
   $("bProps").onclick = () => { propsOpen = !propsOpen; renderProps(); };
   $("bSave").onclick = () => doSave(false);
   $("bExport").onclick = exportSite;
   $("bOut").onclick = () => handles.signOut();
-  $("send").onclick = () => { const v = ($("pin") as HTMLTextAreaElement).value.trim(); if (!v) return; ($("pin") as HTMLTextAreaElement).value = ""; handlePrompt(v); };
+  $("send").onclick = () => {
+    if (building) { toast("A page is building — one moment, then send again"); return; }
+    const v = ($("pin") as HTMLTextAreaElement).value.trim(); if (!v) return;
+    ($("pin") as HTMLTextAreaElement).value = ""; handlePrompt(v);
+  };
   $("pin").addEventListener("keydown", (e: KeyboardEvent) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("send").click(); } });
   $("selchipX").onclick = () => select(null);
   $("connCancel").onclick = () => { connectFrom = null; $("connectbar").style.display = "none"; renderTree(); };
@@ -1157,11 +1226,12 @@ Under 220 lines.`;
   $("mBlue").onclick = () => { pvMode = "blueprint"; $("mBlue").classList.add("on"); $("mLive").classList.remove("on"); renderPreview(); };
   $("mLive").onclick = () => { pvMode = "live"; $("mLive").classList.add("on"); $("mBlue").classList.remove("on"); renderPreview(); };
   $("pBuild").onclick = () => { const pg = curPage != null ? find(tree, curPage) : null; if (pg) buildPage(pg); };
-  $("bSet").onclick = () => { $("setmodal").style.display = "flex"; };
+  $("bSet").onclick = () => { populateSettingsModal(); $("setmodal").style.display = "flex"; };
   $("setDone").onclick = applySettings;
-  $("setClose").onclick = applySettings;
+  $("setClose").onclick = () => { $("setmodal").style.display = "none"; }; /* cancel, don't apply */
   root.querySelectorAll("input[name=rmode]").forEach((r: any) => (r.onchange = () => { const man = ($("mMan") as HTMLInputElement).checked; $("manrows").style.opacity = man ? "1" : ".45"; $("manrows").style.pointerEvents = man ? "auto" : "none"; }));
   window.addEventListener("resize", () => { if (view === "tree") fit(); });
+  loadSettings();
   refreshKeyHint();
   buildModelSelects();
 

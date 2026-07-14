@@ -51,16 +51,18 @@ export default function LandingPage() {
           Early access — limited to 10,000 slots
         </div>
         <h1 className="text-4xl font-bold leading-tight text-white sm:text-6xl">
-          Your visual AI workspace.
+          Describe it. AI builds it.
           <br />
           <span className="bg-gradient-to-r from-indigo-400 to-violet-400 bg-clip-text text-transparent">
             Your keys. Your data.
           </span>
         </h1>
         <p className="mx-auto mt-6 max-w-2xl text-lg text-gray-400">
-          Devgri AI is a 2D node-based canvas with an Auto-CMS layer. Bring
-          your own API keys — they run in your browser and are never stored on
-          our servers. Built-in token and PII masking keeps every prompt clean.
+          Devgri AI turns a one-line prompt into a visual architecture and a
+          real, working website — designed and coded by AI, page by page.
+          Bring your own Anthropic, OpenAI, or Google keys: they run in your
+          browser, never on our servers, and built-in PII masking scrubs every
+          prompt before it leaves your machine.
         </p>
         <div className="mt-10 flex flex-col items-center justify-center gap-4 sm:flex-row">
           <Link
@@ -78,8 +80,8 @@ export default function LandingPage() {
           </Link>
         </div>
         <p className="mt-4 text-xs text-gray-500">
-          No credit card required · Full canvas access · Read-only after trial
-          unless upgraded
+          No credit card required · Full builder access · Read-only after
+          trial unless upgraded
         </p>
       </section>
 
@@ -94,11 +96,12 @@ export default function LandingPage() {
               Bring Your Own Key (BYOK)
             </h2>
             <p className="mt-3 text-sm leading-relaxed text-gray-400">
-              Connect Anthropic, OpenAI, or Google keys directly on the canvas.
-              Keys live in your browser session only — Devgri never transmits,
+              Connect Anthropic, OpenAI, or Google keys in the builder. Keys
+              live in your browser session only — Devgri never transmits,
               stores, or proxies them. You pay your provider directly at cost,
-              with zero markup from us. One key or many: the canvas routes work
-              to whatever you connect.
+              with zero markup from us. One key or many: smart routing sends
+              each task to the best model you&apos;ve connected, and a live
+              token meter shows exactly what every build costs.
             </p>
             <ul className="mt-5 space-y-2 text-sm text-gray-300">
               {[
@@ -121,10 +124,10 @@ export default function LandingPage() {
               The Token Masking advantage
             </h2>
             <p className="mt-3 text-sm leading-relaxed text-gray-400">
-              Drop a PII Masking node between your data and any model. Emails,
-              phone numbers, and secret tokens are detected and replaced
-              client-side before a single byte reaches an API. What the model
-              never sees, the model can never leak.
+              Every prompt you send is scrubbed client-side before a single
+              byte reaches an API: emails, phone numbers, and secret tokens
+              are detected and replaced automatically. What the model never
+              sees, the model can never leak.
             </p>
             <div className="mt-5 rounded-lg border border-line bg-ink p-4 font-mono text-xs">
               <p className="text-gray-500">Input:</p>
@@ -149,18 +152,18 @@ export default function LandingPage() {
           {[
             {
               icon: Workflow,
-              title: "2D node workspace",
-              body: "Drag, connect, and organize your entire workflow visually. Pure client-side rendering — instant, private, no server round-trips.",
+              title: "Architecture-first",
+              body: "AI designs your app as a visual tree — pages, sections, data, logic — that you can inspect, edit, and connect. No black-box chat: you always see the structure.",
             },
             {
               icon: Database,
-              title: "Auto-CMS layer",
-              body: "Every canvas saves as structured content. Your workspaces become a queryable content system, synced to your account.",
+              title: "Real sites, real code",
+              body: "Every page is genuinely generated — real copy, real design, working navigation. Preview it live, then export the whole site as ready-to-host HTML.",
             },
             {
               icon: Zap,
-              title: "Built for speed",
-              body: "Canvas state renders entirely in your browser. Save when you choose. No lag, no bandwidth waste, no surprise costs.",
+              title: "Multi-model routing",
+              body: "Claude, GPT, and Gemini in one builder. Smart routing sends each task to the best model you've connected, and the token meter shows what you saved.",
             },
           ].map((f) => (
             <div
@@ -195,12 +198,12 @@ export default function LandingPage() {
               </p>
               <ul className="mt-6 space-y-2 text-sm text-gray-300">
                 <li className="flex items-center gap-2">
-                  <Check className="h-4 w-4 text-emerald-400" /> Full canvas
+                  <Check className="h-4 w-4 text-emerald-400" /> Full builder
                   access
                 </li>
                 <li className="flex items-center gap-2">
-                  <Check className="h-4 w-4 text-emerald-400" /> BYOK + masking
-                  nodes
+                  <Check className="h-4 w-4 text-emerald-400" /> BYOK + prompt
+                  masking
                 </li>
                 <li className="flex items-center gap-2">
                   <Lock className="h-4 w-4 text-amber-400" /> Read-only after
