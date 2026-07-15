@@ -14,6 +14,14 @@ export type BuilderHandles = {
   signOut: () => void;
 };
 
+/* ---- PII masking (client-side, applied to every outgoing prompt) ---- */
+const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+const PHONE_RE = /(\+?\d[\d\s().-]{7,}\d)/g;
+const TOKEN_RE = /\b(sk|pk|key|tok)[-_][A-Za-z0-9-_]{8,}\b/g;
+function maskText(input: string): string {
+  return input.replace(EMAIL_RE, "[EMAIL]").replace(TOKEN_RE, "[TOKEN]").replace(PHONE_RE, "[PHONE]");
+}
+
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
 const GOOGLE_URL = "https://generativelanguage.googleapis.com/v1beta/models/";
@@ -299,7 +307,7 @@ Keep total output under 700 lines.`;
 
   async function generateWithAI(prompt: string) {
     const mk = pickFor("back")!;
-    const spec = await callAndParse(mk, ARCH_SYSTEM, prompt, (raw) => {
+    const spec = await callAndParse(mk, ARCH_SYSTEM + mindContext(), prompt, (raw) => {
       const s = extractJson(raw);
       if (!s || !Array.isArray(s.pages) || !s.pages.length) throw new Error("missing pages array");
       return s;
@@ -476,7 +484,7 @@ Under 220 lines.`;
     if (tree.designCss) return;
     const mk = pickFor("front")!;
     const brief = JSON.stringify({ site: tree.label, about: tree.need, brand: tree.brand || {}, pages: cluster("pages").children.map((p: any) => p.label) });
-    const css = await callAndParse(mk, DESIGN_SYSTEM, brief, (raw) => {
+    const css = await callAndParse(mk, DESIGN_SYSTEM + mindContext(), brief, (raw) => {
       let c = raw.trim();
       const fence = c.match(/```(?:css)?\s*([\s\S]*?)```/);
       if (fence) c = fence[1].trim();
@@ -498,11 +506,39 @@ Under 220 lines.`;
     typing(true);
     try {
       await ensureDesignSystem();
-      const out = await callAndParse(mk, PAGE_SYSTEM, pageContext(pg), (raw) => {
+      const parsePage = (raw: string) => {
         const html = extractHtml(raw);
         if (html.indexOf("</html>") === -1) throw new Error("HTML truncated — output a more compact page that fits");
         return { html, raw };
-      });
+      };
+      let out = await callAndParse(mk, PAGE_SYSTEM + mindContext(), pageContext(pg), parsePage);
+      mind.builds++;
+      /* self-improvement loop: cheap critic reviews, builder refines */
+      let refineNote = "";
+      if (settings.selfImprove !== false) {
+        try {
+          const critic = pickFor("media")!;
+          const crit = await callAndParse(critic, CRITIC_SYSTEM, out.html.slice(0, 24000), (raw) => {
+            const c = extractJson(raw);
+            if (typeof c.score !== "number") throw new Error("missing score");
+            return c;
+          });
+          if (crit.score < 8 && Array.isArray(crit.fixes) && crit.fixes.length) {
+            const fixes = crit.fixes.slice(0, 5).map((f: any) => String(f));
+            out = await callAndParse(
+              mk,
+              PAGE_SYSTEM + mindContext() + "\n\nREVISION PASS: a design review of your previous attempt scored it " + crit.score + "/10 and demands these fixes:\n- " + fixes.join("\n- ") + "\nRegenerate the COMPLETE page with all fixes applied. Keep everything that already worked.",
+              pageContext(pg) + "\n\nPREVIOUS HTML:\n" + out.html.slice(0, 24000),
+              parsePage
+            );
+            mind.refined++;
+            refineNote = " 🧠 Self-review scored the first draft " + crit.score + "/10 — I rebuilt it with " + fixes.length + " improvement" + (fixes.length === 1 ? "" : "s") + ".";
+          } else {
+            refineNote = " 🧠 Self-review: " + (typeof crit.score === "number" ? crit.score + "/10, shipped as-is." : "passed.");
+          }
+          saveMind();
+        } catch { /* review is best-effort — never block the build */ }
+      }
       pg.html = injectNav(out.html);
       pg.stale = false;
       /* sync the tree to what the model actually built */
@@ -510,7 +546,7 @@ Under 220 lines.`;
       const sm = out.raw.match(/<!--\s*STRUCTURE\s*({[\s\S]*?})\s*-->/);
       if (sm) { try { synced = reconcilePage(pg, JSON.parse(sm[1]).sections); } catch { /* keep tree as-is */ } }
       typing(false);
-      addMsg("ai", "✓ <b>" + esc(pg.label) + "</b> built — real generated code, not a template." + (synced ? " The architecture tree is synced to the page." : "") + " Tell me what to change and press Rebuild.");
+      addMsg("ai", "✓ <b>" + esc(pg.label) + "</b> built — real generated code, not a template." + refineNote + (synced ? " The architecture tree is synced to the page." : "") + " Tell me what to change and press Rebuild.");
       pvMode = "live";
       renderAll();
       toast(pg.label + " built ✓");
@@ -665,6 +701,69 @@ Under 220 lines.`;
     mountImportedTree(buildTreeFromPaths("Pasted structure", paths));
   }
 
+  /* ---------------- Devgri Mind — the system that learns and improves ----
+     Not weight training (impossible in a browser) but honest machine
+     self-improvement: it accumulates your preferences and corrections,
+     injects them into every AI prompt so output quality compounds over
+     time, and runs an automatic review→refine loop on each page build. */
+  const mind: { prefs: string[]; qa: Array<{ q: string; a: string }>; builds: number; refined: number } = { prefs: [], qa: [], builds: 0, refined: 0 };
+  function loadMind() {
+    try {
+      const raw = localStorage.getItem("devgri.mind");
+      if (!raw) return;
+      const m = JSON.parse(raw);
+      if (Array.isArray(m.prefs)) mind.prefs = m.prefs.slice(0, 30);
+      if (Array.isArray(m.qa)) mind.qa = m.qa.slice(0, 30);
+      mind.builds = m.builds || 0; mind.refined = m.refined || 0;
+    } catch { /* fresh mind */ }
+  }
+  function saveMind() { try { localStorage.setItem("devgri.mind", JSON.stringify(mind)); } catch { /* private mode */ } }
+  function mindLearnPref(text: string): boolean {
+    const clean = maskText(text.trim()).slice(0, 180);
+    if (!clean || mind.prefs.some((p) => p.toLowerCase() === clean.toLowerCase())) return false;
+    mind.prefs.push(clean);
+    if (mind.prefs.length > 30) mind.prefs.shift();
+    saveMind();
+    const mc = $("mindCount"); if (mc) mc.textContent = String(mind.prefs.length);
+    return true;
+  }
+  /* implicit learning: durable-sounding statements become preferences */
+  function mindAutoLearn(text: string) {
+    if (text.length > 200) return;
+    if (/\b(always|never|prefer|i (like|love|hate|want)|from now on|by default|every (page|time))\b/i.test(text)) {
+      if (mindLearnPref(text)) toast("🧠 Learned — I’ll remember that");
+    }
+  }
+  function mindContext(): string {
+    return mind.prefs.length
+      ? "\n\nLEARNED USER PREFERENCES (accumulated from past sessions — apply them unless the current instruction contradicts):\n- " + mind.prefs.join("\n- ")
+      : "";
+  }
+  function mindStatus(): string {
+    return "🧠 My mind so far: <b>" + mind.prefs.length + "</b> learned preference" + (mind.prefs.length === 1 ? "" : "s") + ", " + mind.qa.length + " taught answers, " + mind.builds + " builds reviewed, " + mind.refined + " self-refined." + (mind.prefs.length ? "<br>Preferences:<br>• " + mind.prefs.map((p) => esc(p)).join("<br>• ") : " Teach me with <i>“learn: always use dark themes”</i>.");
+  }
+  /* explicit teaching — works with or without an API key */
+  function mindCommand(text: string): string | null {
+    const m = text.match(/^(?:learn|remember|teach)\s*[:\-]?\s*(.+)$/i);
+    if (m) {
+      const body = m[1].trim();
+      const qa = body.match(/^(.+?)\s*=\s*(.+)$/);
+      if (qa) { mind.qa.push({ q: qa[1].trim().toLowerCase(), a: qa[2].trim() }); if (mind.qa.length > 30) mind.qa.shift(); saveMind(); return "🧠 Learned: when you ask about “" + esc(qa[1].trim()) + "”, I’ll answer “" + esc(qa[2].trim()) + "”."; }
+      return mindLearnPref(body)
+        ? "🧠 Learned and saved to my long-term memory: “" + esc(body) + "”. Every future design, build, and edit will honor it."
+        : "I already know that one — it’s in my memory.";
+    }
+    if (/^(what have you learned|show (your )?(mind|memory)|mind status)\b/i.test(text)) return mindStatus();
+    if (/^forget (everything|all)\b/i.test(text)) { mind.prefs = []; mind.qa = []; saveMind(); const mc = $("mindCount"); if (mc) mc.textContent = "0"; return "🧠 Memory wiped. Clean slate."; }
+    const hit = mind.qa.find((p) => text.toLowerCase().includes(p.q));
+    if (hit) return esc(hit.a) + ' <span style="color:var(--text-muted);font-size:10px;">(learned answer)</span>';
+    return null;
+  }
+
+  const CRITIC_SYSTEM = `You are a ruthless design-QA model reviewing a generated web page. Respond with ONLY raw JSON:
+{"score": 7, "fixes": ["increase hero contrast", "tighten section spacing"]}
+Score 1-10 for: visual hierarchy, contrast, spacing rhythm, responsiveness, copy quality, brand consistency. Max 5 fixes, each under 12 words, each concrete and actionable. Score 9+ only if genuinely excellent.`;
+
   /* ---------------- free local agent (no API key, no cost) ---------------- */
   function projectStats(): string {
     if (!tree) return "";
@@ -679,7 +778,7 @@ Under 220 lines.`;
   function localBrain(text: string): string | null {
     const t = text.toLowerCase();
     if (/\b(hi|hello|hey|yo)\b/.test(t) && t.length < 20) return "Hey! I’m your workspace agent — free, instant, running right here in your browser. Ask me anything about the project, or tell me to change something: <i>“add page Pricing”, “make it teal”, “connect it to Orders”</i>.";
-    if (/what can you do|help|how do i|how to|guide/.test(t)) return "Here’s what I can do without any API key:<br>• <b>edit the tree</b> — “add page Pricing”, “rename to Our Story”, “delete”, “connect to Orders as data”, colors<br>• <b>answer questions</b> about pages, data, logic, connections, export, keys<br>• <b>import code</b> — press <b>Link repo</b> to render any GitHub repo or local folder as nodes<br>Add an API key (gear icon) and I get superpowers: real architecture design and real page generation.<br>" + projectStats();
+    if (/what can you do|help|how do i|how to|guide/.test(t)) return "Here’s what I can do without any API key:<br>• <b>edit the tree</b> — “add page Pricing”, “rename to Our Story”, “delete”, “connect to Orders as data”, colors<br>• <b>answer questions</b> about pages, data, logic, connections, export, keys<br>• <b>import code</b> — press <b>Link repo</b> to render any GitHub repo or local folder as nodes<br>• <b>learn</b> — say <i>“learn: always use dark themes”</i> and I remember it forever, shaping every future build. Ask <i>“what have you learned?”</i> anytime<br>Add an API key (gear icon) and I get superpowers: real architecture design, real page generation, and a self-review loop that refines every page it builds.<br>" + projectStats();
     if (/what.*(project|workspace|tree|architecture)|status|overview|look like/.test(t)) { const pagesC = tree ? cluster("pages") : null; return projectStats() + (pagesC && pagesC.children.length ? "<br>Pages: " + esc(pagesC.children.map((p: any) => p.label).join(", ")) + "." : "") + "<br>Tip: use the search box on the canvas to jump to any element."; }
     if (/connection|dashed|line|purple|teal|orange/.test(t)) return "Three connection types live on the canvas:<br>• <b style=\"color:#7F77DD\">navigation</b> (purple) — a menu item or button leads to a page<br>• <b style=\"color:#1D9E75\">data</b> (teal) — a section reads/writes a table<br>• <b style=\"color:#D85A30\">event</b> (orange) — something triggers a Logic action<br>Drag from a node’s purple dot onto another node to create one.";
     if (/export|download|zip|deploy|host/.test(t)) return "Press <b>Export</b> (top right) to download every built page as a static site — index.html plus one file per page, nav wired up. Drop the folder on Vercel, Netlify, or GitHub Pages and it’s live.";
@@ -827,6 +926,9 @@ Under 220 lines.`;
     addMsg("user", esc(text));
     const t = text.toLowerCase();
     if (/^undo\b/.test(t)) { undo(); await ai("Undid the last change.", 500); return; }
+    const learned = mindCommand(text);
+    if (learned) { await ai(learned, 500); return; }
+    mindAutoLearn(text);
     if (!hasAnyKey()) { await handlePromptLocal(text); return; }
     /* real AI ops */
     typing(true);
@@ -834,7 +936,7 @@ Under 220 lines.`;
       const n = sel != null ? find(tree, sel) : null;
       const mk = pickFor(n ? domainOf(n) : "back")!;
       const userMsg = "PROJECT STATE:\n" + treeContext() + "\n\nSELECTED ELEMENT: " + (n ? n.id + " (" + n.type + " “" + n.label + "”)" : "none") + "\n\nUSER INSTRUCTION:\n" + text;
-      const out = await callAndParse(mk, OPS_SYSTEM, userMsg, (raw) => {
+      const out = await callAndParse(mk, OPS_SYSTEM + mindContext(), userMsg, (raw) => {
         const o = extractJson(raw);
         if (typeof o.reply !== "string") throw new Error("missing reply field");
         return o;
@@ -1047,12 +1149,15 @@ Under 220 lines.`;
   }
   async function sendNodeChat(n: any, text: string) {
     nodeSay(n, "user", esc(text));
+    const learned = mindCommand(text);
+    if (learned) { nodeSay(n, "ai", learned); renderProps(); return; }
+    mindAutoLearn(text);
     if (!hasAnyKey()) { localNodeChat(n, text); return; }
     n._busy = true; renderProps();
     try {
       const mk = pickFor(domainOf(n))!;
       const userMsg = "PROJECT STATE:\n" + treeContext() + "\n\nSELECTED ELEMENT: " + n.id + " (" + n.type + " “" + n.label + "”)\n\nThe user is chatting INSIDE this element’s panel. Apply the instruction to this element or its children ONLY, unless it explicitly names another element.\n\nUSER INSTRUCTION:\n" + text;
-      const out = await callAndParse(mk, OPS_SYSTEM, userMsg, (raw) => {
+      const out = await callAndParse(mk, OPS_SYSTEM + mindContext(), userMsg, (raw) => {
         const o = extractJson(raw);
         if (typeof o.reply !== "string") throw new Error("missing reply field");
         return o;
@@ -1382,6 +1487,8 @@ Under 220 lines.`;
     ($("kKeyAnthropic") as HTMLInputElement).value = settings.keys.anthropic;
     ($("kKeyOpenai") as HTMLInputElement).value = settings.keys.openai;
     ($("kKeyGoogle") as HTMLInputElement).value = settings.keys.google;
+    ($("kImprove") as HTMLInputElement).checked = settings.selfImprove !== false;
+    const mc = $("mindCount"); if (mc) mc.textContent = String(mind.prefs.length);
     ($("mAuto") as HTMLInputElement).checked = settings.mode !== "manual";
     ($("mMan") as HTMLInputElement).checked = settings.mode === "manual";
     const man = settings.mode === "manual";
@@ -1403,6 +1510,7 @@ Under 220 lines.`;
       if (s && s.keys) { settings.keys = { anthropic: s.keys.anthropic || "", openai: s.keys.openai || "", google: s.keys.google || "" }; }
       if (s && s.mode) settings.mode = s.mode;
       if (s && s.manual) settings.manual = { ...settings.manual, ...s.manual };
+      if (s && typeof s.selfImprove === "boolean") settings.selfImprove = s.selfImprove;
     } catch { /* ignore corrupt state */ }
   }
   function applySettings() {
@@ -1413,6 +1521,7 @@ Under 220 lines.`;
     };
     settings.mode = ($("mMan") as HTMLInputElement).checked ? "manual" : "auto";
     settings.manual = { front: ($("sFront") as HTMLSelectElement).value, back: ($("sBack") as HTMLSelectElement).value, media: ($("sMedia") as HTMLSelectElement).value };
+    settings.selfImprove = ($("kImprove") as HTMLInputElement).checked;
     persistSettings();
     $("setmodal").style.display = "none";
     refreshKeyHint();
@@ -1470,8 +1579,10 @@ Under 220 lines.`;
   root.querySelectorAll("input[name=rmode]").forEach((r: any) => (r.onchange = () => { const man = ($("mMan") as HTMLInputElement).checked; $("manrows").style.opacity = man ? "1" : ".45"; $("manrows").style.pointerEvents = man ? "auto" : "none"; }));
   window.addEventListener("resize", () => { if (root.isConnected && view === "tree" && tree) fit(); });
   loadSettings();
+  loadMind();
   refreshKeyHint();
   buildModelSelects();
+  $("mindClear").onclick = () => { mind.prefs = []; mind.qa = []; saveMind(); const mc = $("mindCount"); if (mc) mc.textContent = "0"; toast("🧠 Memory cleared"); };
 
   /* ---------------- boot ---------------- */
   renderProjects();

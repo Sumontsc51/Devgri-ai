@@ -212,6 +212,9 @@ export const BUILDER_HTML = `
     <div style="display:flex;align-items:center;gap:8px;margin:4px 0;"><span style="font-size:12px;width:78px;">Anthropic</span><input type="password" id="kKeyAnthropic" placeholder="sk-ant-…" style="flex:1;"></div>
     <div style="display:flex;align-items:center;gap:8px;margin:4px 0;"><span style="font-size:12px;width:78px;">OpenAI</span><input type="password" id="kKeyOpenai" placeholder="sk-…" style="flex:1;"></div>
     <div style="display:flex;align-items:center;gap:8px;margin:4px 0;"><span style="font-size:12px;width:78px;">Google</span><input type="password" id="kKeyGoogle" placeholder="AIza…" style="flex:1;"></div>
+    <div style="font-size:12px;color:var(--text-secondary);margin:12px 0 6px;">Self-improving AI</div>
+    <label style="display:block;font-size:13px;margin:4px 0;"><input type="checkbox" id="kImprove" checked> Auto-review & refine every page build (extra pass)</label>
+    <div style="font-size:12px;color:var(--text-muted);margin:4px 0 0;">Learned preferences: <span id="mindCount">0</span><button id="mindClear" style="font-size:11px;border:1px solid var(--border);margin-left:8px;padding:2px 8px;">Forget all</button></div>
     <div style="font-size:12px;color:var(--text-secondary);margin:12px 0 6px;">Routing — which model handles each kind of task</div>
     <label style="display:block;font-size:13px;margin:4px 0;"><input type="radio" name="rmode" id="mAuto" checked> Auto — best available model per task</label>
     <label style="display:block;font-size:13px;margin:4px 0;"><input type="radio" name="rmode" id="mMan"> Hardcoded — I choose per task</label>
