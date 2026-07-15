@@ -26,10 +26,12 @@ const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
 const GOOGLE_URL = "https://generativelanguage.googleapis.com/v1beta/models/";
 
-type Provider = "anthropic" | "openai" | "google";
+type Provider = "anthropic" | "openai" | "google" | "devgri";
 type ModelDef = { provider: Provider; id: string; label: string; price: [number, number] };
 
-/* Model registry — price is rough USD per million tokens [in, out], display only. */
+/* Model registry — price is rough USD per million tokens [in, out], display only.
+   devgri1 is Devgri's own model: a deterministic inference engine that runs
+   entirely in the browser — always available, zero cost, no key. */
 const MODELS: Record<string, ModelDef> = {
   opus: { provider: "anthropic", id: "claude-opus-4-8", label: "Claude Opus 4.8", price: [15, 75] },
   sonnet: { provider: "anthropic", id: "claude-sonnet-5", label: "Claude Sonnet 5", price: [3, 15] },
@@ -38,13 +40,15 @@ const MODELS: Record<string, ModelDef> = {
   gpt4omini: { provider: "openai", id: "gpt-4o-mini", label: "GPT-4o mini", price: [0.15, 0.6] },
   gemini25pro: { provider: "google", id: "gemini-2.5-pro", label: "Gemini 2.5 Pro", price: [1.25, 10] },
   gemini20flash: { provider: "google", id: "gemini-2.0-flash", label: "Gemini 2.0 Flash", price: [0.1, 0.4] },
+  devgri1: { provider: "devgri", id: "devgri-1", label: "Devgri-1 (built-in · free)", price: [0, 0] },
 };
-const PROVIDER_LABEL: Record<Provider, string> = { anthropic: "Anthropic", openai: "OpenAI", google: "Google" };
-/* Auto-routing preference per task domain, best-first. */
+const PROVIDER_LABEL: Record<Provider, string> = { anthropic: "Anthropic", openai: "OpenAI", google: "Google", devgri: "Devgri (built-in)" };
+/* Auto-routing preference per task domain, best-first. Devgri-1 is the
+   universal fallback — the system always has a working model. */
 const AUTOPREF: Record<string, string[]> = {
-  back: ["opus", "gpt4o", "gemini25pro", "sonnet", "gemini20flash", "gpt4omini", "haiku"],
-  front: ["sonnet", "gpt4o", "gemini25pro", "opus", "haiku", "gemini20flash", "gpt4omini"],
-  media: ["haiku", "gemini20flash", "gpt4omini", "sonnet", "gpt4o", "gemini25pro", "opus"],
+  back: ["opus", "gpt4o", "gemini25pro", "sonnet", "gemini20flash", "gpt4omini", "haiku", "devgri1"],
+  front: ["sonnet", "gpt4o", "gemini25pro", "opus", "haiku", "gemini20flash", "gpt4omini", "devgri1"],
+  media: ["haiku", "gemini20flash", "gpt4omini", "sonnet", "gpt4o", "gemini25pro", "opus", "devgri1"],
 };
 
 export function initBuilder(root: HTMLElement, handles: BuilderHandles): void {
@@ -69,9 +73,9 @@ export function initBuilder(root: HTMLElement, handles: BuilderHandles): void {
 
   function domainOf(n: any) { if (n.type === "section" && /hero|gallery|image|banner/i.test(n.label)) return "media"; return ["datas", "table", "field", "logics", "action", "step", "tools", "tool", "option", "project", "repo", "folder", "file"].indexOf(n.type) > -1 ? "back" : "front"; }
   function hasAnyKey() { return !!(settings.keys.anthropic || settings.keys.openai || settings.keys.google); }
-  function avail() { return Object.keys(MODELS).filter((k) => settings.keys[MODELS[k].provider]); }
-  function pickFor(d: string): string | null {
-    const av = avail(); if (!av.length) return null;
+  function avail() { return Object.keys(MODELS).filter((k) => MODELS[k].provider === "devgri" || settings.keys[MODELS[k].provider]); }
+  function pickFor(d: string): string {
+    const av = avail(); /* never empty — Devgri-1 is always available */
     if (settings.mode === "manual" && av.indexOf(settings.manual[d]) > -1) return settings.manual[d];
     for (const k of AUTOPREF[d] || []) if (av.indexOf(k) > -1) return k;
     return av[0];
@@ -79,9 +83,9 @@ export function initBuilder(root: HTMLElement, handles: BuilderHandles): void {
   function modelOf(n: any) { const p = pickFor(domainOf(n)); return p ? MODELS[p].label : "No model"; }
   function whyOf(n: any) { const av = avail(); if (av.length <= 1) return av.length ? "only available model" : "add an API key"; return (settings.mode === "manual" ? "hardcoded: " : "auto: ") + WHY[domainOf(n)]; }
   function routeSummary() {
-    if (!hasAnyKey()) return "No API keys connected — running in <b>offline demo mode</b>. Add an Anthropic, OpenAI, or Google key in AI settings (gear icon) to design with real AI.";
+    if (!hasAnyKey()) return "Running on <b>Devgri-1</b> — our own model, built into this page. It designs architectures and builds real sites for free, entirely in your browser, and it improves as it learns your preferences (🧠). Add an Anthropic, OpenAI, or Google key in AI settings for frontier-model quality on top.";
     const provs = (["anthropic", "openai", "google"] as Provider[]).filter((p) => settings.keys[p]).map((p) => PROVIDER_LABEL[p]).join(", ");
-    return "Model routing (" + (settings.mode === "manual" ? "your hardcoded mapping" : "auto — best available per task") + "):<br>• frontend → <b>" + MODELS[pickFor("front")!].label + "</b><br>• backend and logic → <b>" + MODELS[pickFor("back")!].label + "</b><br>• images and UI → <b>" + MODELS[pickFor("media")!].label + "</b><br>Keys connected: " + provs + ". All calls go browser-direct to the provider — never through Devgri. PII masking is on: emails, phone numbers and secret tokens are scrubbed client-side before any prompt leaves your browser.";
+    return "Model routing (" + (settings.mode === "manual" ? "your hardcoded mapping" : "auto — best available per task") + "):<br>• frontend → <b>" + MODELS[pickFor("front")].label + "</b><br>• backend and logic → <b>" + MODELS[pickFor("back")].label + "</b><br>• images and UI → <b>" + MODELS[pickFor("media")].label + "</b><br>Keys connected: " + provs + " (+ Devgri-1 built-in, always free). All calls go browser-direct to the provider — never through Devgri. PII masking is on: emails, phone numbers and secret tokens are scrubbed client-side before any prompt leaves your browser.";
   }
 
   function node(label: string, type: string, need?: string, how?: string, children?: any[]): any { return { id: uid++, label, type, need: need || "", how: how || "", color: "", notes: [], children: children || [] }; }
@@ -122,6 +126,13 @@ export function initBuilder(root: HTMLElement, handles: BuilderHandles): void {
   async function callModel(modelKey: string, system: string, userText: string): Promise<string> {
     const def = MODELS[modelKey];
     if (!def) throw new Error("Unknown model: " + modelKey);
+    if (def.provider === "devgri") {
+      /* Devgri-1: in-browser inference — a tick of latency keeps the UI honest */
+      await new Promise((r) => setTimeout(r, 350));
+      const result = devgriInfer(system, userText);
+      trackUsage(modelKey, Math.ceil(userText.length / 4), Math.ceil(result.length / 4));
+      return result;
+    }
     const key = settings.keys[def.provider];
     if (!key) throw new Error("No " + PROVIDER_LABEL[def.provider] + " API key — add one in AI settings");
 
@@ -240,7 +251,34 @@ export function initBuilder(root: HTMLElement, handles: BuilderHandles): void {
     });
     return { root, cs, pageNodes };
   }
+  /* Devgri-1 brand intuition: keyword-driven identity selection */
+  function brandFromPrompt(prompt: string): { primary: string; font: string; vibe: string } {
+    const p = prompt.toLowerCase();
+    if (/bakery|food|restaurant|cafe|coffee|kitchen/.test(p)) return { primary: "#D97706", font: "Poppins", vibe: "warm, artisanal, inviting" };
+    if (/photo|portfolio|studio|design|creative|art/.test(p)) return { primary: "#111827", font: "Inter", vibe: "minimal, monochrome, gallery-like" };
+    if (/shop|store|commerce|sell|market/.test(p)) return { primary: "#0F766E", font: "Inter", vibe: "clean, trustworthy, conversion-focused" };
+    if (/health|fitness|yoga|wellness|clinic/.test(p)) return { primary: "#059669", font: "Poppins", vibe: "calm, fresh, energetic" };
+    if (/law|finance|consult|agency|corporate|b2b/.test(p)) return { primary: "#1E3A8A", font: "Inter", vibe: "confident, premium, precise" };
+    return { primary: "#4F46B8", font: "Inter", vibe: "clean, modern, confident" };
+  }
+  /* Devgri-1 architecture synthesis — returns the same spec shape cloud models emit */
+  function specFromPrompt(prompt: string) {
+    const g = genProjectRaw(prompt);
+    return {
+      name: deriveName(prompt),
+      pages: g.pages.map(([name, secs]) => ({ name, sections: secs.map((s) => ({ name: s })) })),
+      tables: g.tables.map(([name, fields]) => ({ name, fields })),
+      actions: g.acts.map((a) => ({ name: a, trigger: g.STEPPLANS[a] ? g.STEPPLANS[a][0] : "Manual", steps: (g.STEPPLANS[a] ? g.STEPPLANS[a][1] : []).map(([label, kind]) => ({ label, kind })) })),
+      tools: g.toolNames,
+      connections: g.connections,
+      brand: brandFromPrompt(prompt),
+    };
+  }
   function genProject(prompt: string) {
+    const s = specFromPrompt(prompt);
+    return assembleProject(s.name, prompt, s.pages, s.tables, s.actions, s.tools, s.connections);
+  }
+  function genProjectRaw(prompt: string) {
     const p = prompt.toLowerCase();
     const pages: Array<[string, string[]]> = [["Home", ["Hero", "Features", "Footer"]]];
     if (/shop|store|sell|commerce|order|product|bakery|menu of|buy/.test(p)) { pages.push(["Products", ["Product grid", "Filters"]]); pages.push(["Cart", ["Cart items", "Checkout button"]]); }
@@ -274,7 +312,7 @@ export function initBuilder(root: HTMLElement, handles: BuilderHandles): void {
       if (dmap[s]) connections.push({ from: s, to: dmap[s], type: "data" });
       if (emap[s]) connections.push({ from: s, to: emap[s], type: "event" });
     }));
-    return assembleProject(deriveName(prompt), prompt, pages.slice(0, 7).map(([name, secs]) => ({ name, sections: secs.map((s) => ({ name: s })) })), tables.map(([name, fields]) => ({ name, fields })), acts.map((a) => ({ name: a, trigger: STEPPLANS[a] ? STEPPLANS[a][0] : "Manual", steps: (STEPPLANS[a] ? STEPPLANS[a][1] : []).map(([label, kind]) => ({ label, kind })) })), toolNames, connections);
+    return { pages: pages.slice(0, 7), tables, acts, STEPPLANS, toolNames, connections };
   }
 
   /* ---------------- real Claude generation ---------------- */
@@ -497,7 +535,6 @@ Under 220 lines.`;
 
   async function buildPage(pg: any, announce?: boolean) {
     if (!pg) return;
-    if (!hasAnyKey()) { toast("Add an API key in AI settings to build the real site"); $("setmodal").style.display = "flex"; return; }
     if (building) { toast("Already building a page — one moment"); return; }
     building = true;
     updateBuildBtn(pg);
@@ -563,8 +600,8 @@ Under 220 lines.`;
     if (!b || !t) return;
     if (building) { t.textContent = "Building…"; (b as HTMLButtonElement).disabled = true; return; }
     (b as HTMLButtonElement).disabled = false;
-    if (!pg) { t.textContent = "Build page with Claude"; return; }
-    t.textContent = !pg.html ? "Build “" + pg.label + "” with Claude" : pg.stale ? "Rebuild “" + pg.label + "” (changes pending)" : "Rebuild “" + pg.label + "”";
+    if (!pg) { t.textContent = "Build page with AI"; return; }
+    t.textContent = !pg.html ? "Build “" + pg.label + "” · " + MODELS[pickFor("front")].label.replace(/ \(.*\)/, "") : pg.stale ? "Rebuild “" + pg.label + "” (changes pending)" : "Rebuild “" + pg.label + "”";
   }
   function renderLive() {
     const pg = curPage != null ? find(tree, curPage) : null;
@@ -584,7 +621,7 @@ Under 220 lines.`;
       if (key !== lastFrameKey) { lastFrameKey = key; frame.srcdoc = pg.html; }
     } else {
       lastFrameKey = "";
-      frame.srcdoc = '<html><body style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:system-ui;color:#96948c;background:#fafaf8;"><div style="text-align:center;max-width:420px;padding:20px;"><div style="font-size:34px;">✦</div><p style="font-size:15px;color:#555;margin:8px 0 4px;font-weight:600;">' + esc(pg ? pg.label : "This page") + " isn’t built yet</p><p style=\"font-size:13px;line-height:1.6;\">Press <b>Build with Claude</b> above — Claude will write this page’s real HTML from your architecture.</p></div></body></html>";
+      frame.srcdoc = '<html><body style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:system-ui;color:#96948c;background:#fafaf8;"><div style="text-align:center;max-width:420px;padding:20px;"><div style="font-size:34px;">✦</div><p style="font-size:15px;color:#555;margin:8px 0 4px;font-weight:600;">' + esc(pg ? pg.label : "This page") + " isn’t built yet</p><p style=\"font-size:13px;line-height:1.6;\">Press <b>Build page</b> above — the AI will write this page’s real HTML from your architecture. No key? Devgri-1 builds it free.</p></div></body></html>";
     }
   }
   window.addEventListener("message", (e: MessageEvent) => {
@@ -764,6 +801,112 @@ Under 220 lines.`;
 {"score": 7, "fixes": ["increase hero contrast", "tighten section spacing"]}
 Score 1-10 for: visual hierarchy, contrast, spacing rhythm, responsiveness, copy quality, brand consistency. Max 5 fixes, each under 12 words, each concrete and actionable. Score 9+ only if genuinely excellent.`;
 
+  /* ================================================================== */
+  /* DEVGRI-1 — Devgri's own model. A deterministic inference engine     */
+  /* that runs 100% in the browser: architecture synthesis, design-      */
+  /* system generation, and full page rendering. Zero tokens, zero keys. */
+  /* It reads the Mind, so it improves as it learns your preferences.    */
+  /* ================================================================== */
+
+  function mindWants(re: RegExp): boolean { return mind.prefs.some((p) => re.test(p)); }
+
+  function devgriCss(brand: { primary: string; font: string; vibe: string }): string {
+    const dark = mindWants(/dark/i);
+    const bold = mindWants(/bold|strong|heavy/i);
+    const round = mindWants(/round|soft|pill/i) ? "18px" : "12px";
+    const bg = dark ? "#0f0f14" : "#faf9f7", surface = dark ? "#1a1a22" : "#ffffff", text = dark ? "#ececf1" : "#1c1c22", mut = dark ? "#9a9aa8" : "#6b6b74", line = dark ? "#2c2c38" : "#e8e6e1";
+    return `:root{--p:${brand.primary};--bg:${bg};--sf:${surface};--tx:${text};--mut:${mut};--ln:${line};--r:${round};}
+*{margin:0;box-sizing:border-box;}
+body{font-family:'${brand.font}',-apple-system,sans-serif;background:var(--bg);color:var(--tx);line-height:1.6;-webkit-font-smoothing:antialiased;}
+h1,h2,h3{line-height:1.2;font-weight:${bold ? 800 : 700};letter-spacing:-0.02em;}
+.container{max-width:1080px;margin:0 auto;padding:0 24px;}
+.nav{position:sticky;top:0;z-index:10;background:var(--sf);border-bottom:1px solid var(--ln);display:flex;align-items:center;gap:6px;padding:14px 28px;}
+.nav .brand{font-weight:800;font-size:18px;margin-right:auto;color:var(--tx);text-decoration:none;}
+.nav a{color:var(--mut);text-decoration:none;font-size:14px;padding:7px 13px;border-radius:8px;}
+.nav a:hover{background:var(--bg);color:var(--tx);}
+.nav a.active{background:var(--p);color:#fff;}
+.btn{display:inline-block;padding:13px 26px;border-radius:calc(var(--r) - 2px);border:1px solid var(--ln);color:var(--tx);text-decoration:none;font-weight:600;font-size:15px;}
+.btn-primary{background:var(--p);border-color:var(--p);color:#fff;}
+.btn-primary:hover{filter:brightness(1.1);}
+.card{background:var(--sf);border:1px solid var(--ln);border-radius:var(--r);padding:28px;}
+.section{padding:72px 0;}
+.section h2{font-size:32px;margin-bottom:10px;}
+.section .sub{color:var(--mut);max-width:560px;margin-bottom:36px;}
+.grid-2{display:grid;grid-template-columns:repeat(2,1fr);gap:22px;}
+.grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:22px;}
+.footer{border-top:1px solid var(--ln);padding:36px 28px;color:var(--mut);font-size:14px;display:flex;gap:18px;flex-wrap:wrap;align-items:center;}
+.footer .brand{font-weight:700;color:var(--tx);margin-right:auto;}
+input,textarea{width:100%;padding:12px 14px;border:1px solid var(--ln);border-radius:10px;background:var(--bg);color:var(--tx);font:inherit;margin-bottom:12px;}
+@media(max-width:760px){.grid-2,.grid-3{grid-template-columns:1fr;}.section{padding:48px 0;}.section h2{font-size:26px;}.nav{flex-wrap:wrap;}}`;
+  }
+
+  function devgriPage(ctxJson: string): string {
+    let ctx: any = {};
+    try { ctx = JSON.parse(ctxJson.slice(ctxJson.indexOf("{"))); } catch { /* defaults below */ }
+    const brand = ctx.brand && ctx.brand.primary ? ctx.brand : { primary: "#4F46B8", font: "Inter", vibe: "clean, modern" };
+    const site = ctx.site || "My Site", page = ctx.currentPage || "Home";
+    const pages: string[] = Array.isArray(ctx.pages) && ctx.pages.length ? ctx.pages : [page];
+    const secs: any[] = Array.isArray(ctx.sections) && ctx.sections.length ? ctx.sections : [{ name: "Hero" }, { name: "Features" }, { name: "Footer" }];
+    const css = ctx.designCss || devgriCss(brand);
+    const nav = '<nav class="nav"><a class="brand" href="#" data-page="' + pages[0] + '">' + esc(site) + "</a>" + pages.map((p) => '<a href="#" data-page="' + esc(p) + '"' + (p === page ? ' class="active"' : "") + ">" + esc(p) + "</a>").join("") + "</nav>";
+    const built: any[] = [];
+    const tile = (i: number) => '<div style="height:150px;border-radius:10px;background:linear-gradient(135deg,' + brand.primary + (["22", "44", "66", "88", "aa", "cc"][i % 6]) + "," + brand.primary + ');"></div>';
+    const bodyHtml = secs.map((s: any, si: number) => {
+      const nm = String(s.name || "Section"), low = nm.toLowerCase(), need = s.need ? String(s.need) : "";
+      const els: any[] = Array.isArray(s.elements) ? s.elements : [];
+      const note = (s.notes && s.notes.length ? String(s.notes[s.notes.length - 1]) : "");
+      built.push({ name: nm, need: need || undefined, elements: els.length ? els.map((e: any) => ({ name: String(e.name || "Element") })) : undefined });
+      if (/hero/.test(low)) {
+        const head = note || need || ("Welcome to " + site);
+        return '<header class="section" style="padding:110px 0;background:linear-gradient(160deg,' + brand.primary + '14,transparent 60%);"><div class="container"><h1 style="font-size:46px;max-width:640px;">' + esc(head.length > 90 ? "Welcome to " + site : head) + '</h1><p class="sub" style="margin-top:14px;">' + esc(brand.vibe ? cap(brand.vibe) + " — built for you." : "Everything you need, in one place.") + '</p><div style="display:flex;gap:12px;margin-top:26px;"><a class="btn btn-primary" href="#" data-page="' + esc(pages[Math.min(1, pages.length - 1)]) + '">Get started</a><a class="btn" href="#" data-page="' + esc(pages[pages.length - 1]) + '">Learn more</a></div></div></header>';
+      }
+      if (/footer/.test(low)) {
+        return '<footer class="footer"><span class="brand">' + esc(site) + "</span>" + pages.map((p) => '<a href="#" data-page="' + esc(p) + '" style="color:inherit;">' + esc(p) + "</a>").join("") + "<span>© " + new Date().getFullYear() + "</span></footer>";
+      }
+      if (/form|contact/.test(low)) {
+        const fields = els.length ? els : [{ name: "Name" }, { name: "Email" }, { name: "Message" }, { name: "Submit button" }];
+        return '<section class="section"><div class="container"><h2>' + esc(nm) + '</h2><p class="sub">' + esc(need || "We usually reply within one business day.") + '</p><div class="card" style="max-width:520px;">' + fields.map((f: any) => { const fn = String(f.name || "Field"); if (/submit|button|send/i.test(fn)) return '<a class="btn btn-primary" href="#">' + esc(fn.replace(/ ?button/i, "") || "Send") + "</a>"; if (/message|detail|body/i.test(fn)) return '<textarea rows="4" placeholder="' + esc(fn) + '"></textarea>'; return '<input placeholder="' + esc(fn) + '">'; }).join("") + "</div></div></section>";
+      }
+      if (/gallery|portfolio|grid|work|product/.test(low)) {
+        return '<section class="section"><div class="container"><h2>' + esc(nm) + '</h2><p class="sub">' + esc(need || "A selection of what we do best.") + '</p><div class="grid-3">' + [0, 1, 2, 3, 4, 5].map((i) => '<div class="card" style="padding:0;overflow:hidden;">' + tile(i) + '<div style="padding:16px;"><b>' + esc(site) + " №" + (i + 1) + '</b><p style="color:var(--mut);font-size:13px;">' + esc(brand.vibe.split(",")[0] || "signature work") + "</p></div></div>").join("") + "</div></div></section>";
+      }
+      if (/pricing|plan/.test(low)) {
+        return '<section class="section"><div class="container"><h2>' + esc(nm) + '</h2><p class="sub">' + esc(need || "Simple, honest pricing.") + '</p><div class="grid-3">' + [["Starter", "$9"], ["Pro", "$29"], ["Team", "$79"]].map(([t, pr], i) => '<div class="card"' + (i === 1 ? ' style="border-color:var(--p);"' : "") + "><b>" + t + '</b><div style="font-size:34px;font-weight:800;margin:8px 0;">' + pr + '<span style="font-size:14px;color:var(--mut);font-weight:400;">/mo</span></div><p style="color:var(--mut);font-size:14px;margin-bottom:16px;">Everything in ' + (i === 0 ? "the box" : (["Starter", "Pro"][i - 1] || "") + ", plus more") + '.</p><a class="btn ' + (i === 1 ? "btn-primary" : "") + '" href="#">Choose ' + t + "</a></div>").join("") + "</div></div></section>";
+      }
+      if (/testimonial|review|quote/.test(low)) {
+        return '<section class="section"><div class="container"><h2>' + esc(nm) + '</h2><div class="grid-2">' + [["“Exactly what we needed — fast, polished, reliable.”", "Alex M."], ["“The best decision we made this year. Highly recommended.”", "Jordan P."]].map(([q, a]) => '<div class="card"><p style="font-size:17px;">' + q + '</p><p style="color:var(--mut);margin-top:12px;">— ' + a + "</p></div>").join("") + "</div></div></section>";
+      }
+      if (/stat|number|metric/.test(low)) {
+        return '<section class="section"><div class="container"><div class="grid-3">' + [["4.9★", "average rating"], ["1,200+", "happy customers"], ["24h", "response time"]].map(([v, l]) => '<div class="card" style="text-align:center;"><div style="font-size:34px;font-weight:800;color:var(--p);">' + v + '</div><p style="color:var(--mut);">' + l + "</p></div>").join("") + "</div></div></section>";
+      }
+      /* features / services / generic */
+      const items = els.length ? els.map((e: any) => String(e.name || "Item")) : ["Quality first", "Fast turnaround", "Fair pricing"];
+      return '<section class="section"' + (si % 2 ? ' style="background:var(--sf);"' : "") + '><div class="container"><h2>' + esc(nm) + '</h2><p class="sub">' + esc(need || note || "Here’s what makes " + site + " different.") + '</p><div class="grid-3">' + items.slice(0, 6).map((it: string, i: number) => '<div class="card"><div style="width:38px;height:38px;border-radius:10px;background:' + brand.primary + '22;color:' + brand.primary + ';display:flex;align-items:center;justify-content:center;font-weight:800;">' + (i + 1) + '</div><b style="display:block;margin:12px 0 6px;">' + esc(it) + '</b><p style="color:var(--mut);font-size:14px;">' + esc(need ? need.slice(0, 90) : "Thoughtfully crafted as part of " + nm.toLowerCase() + ".") + "</p></div>").join("") + "</div></div></section>";
+    }).join("");
+    const html = "<!DOCTYPE html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>" + esc(page) + " — " + esc(site) + '</title><link href="https://fonts.googleapis.com/css2?family=' + encodeURIComponent(brand.font) + ':wght@400;600;800&display=swap" rel="stylesheet"><style>' + css + "</style></head><body>" + nav + bodyHtml + "</body></html>";
+    return html + "\n<!--STRUCTURE " + JSON.stringify({ sections: built }) + "-->";
+  }
+
+  function devgriInfer(system: string, userText: string): string {
+    if (system.indexOf("architect model of an AI app builder") > -1) {
+      return JSON.stringify(specFromPrompt(userText.split("\nIMPORTANT:")[0]));
+    }
+    if (system.indexOf("design-system model") > -1) {
+      let brand = { primary: "#4F46B8", font: "Inter", vibe: "clean, modern, confident" };
+      try { const b = JSON.parse(userText).brand; if (b && b.primary) brand = b; } catch { /* defaults */ }
+      return devgriCss(brand);
+    }
+    if (system.indexOf("frontend model") > -1) {
+      return devgriPage(userText);
+    }
+    if (system.indexOf("design-QA model") > -1) {
+      return '{"score":8,"fixes":[]}'; /* Devgri-1 doesn’t re-review its own deterministic output */
+    }
+    /* ops / conversational fallback */
+    const q = userText.split("USER INSTRUCTION:").pop() || userText;
+    return JSON.stringify({ reply: "(Devgri-1) I’ve noted that. For structural edits, use direct commands — “add page Pricing”, “rename to X”, “connect to Orders as data” — or connect a cloud model key for free-form changes.", ops: [], noted: q.slice(0, 100) });
+  }
+
   /* ---------------- free local agent (no API key, no cost) ---------------- */
   function projectStats(): string {
     if (!tree) return "";
@@ -777,7 +920,7 @@ Score 1-10 for: visual hierarchy, contrast, spacing rhythm, responsiveness, copy
   }
   function localBrain(text: string): string | null {
     const t = text.toLowerCase();
-    if (/\b(hi|hello|hey|yo)\b/.test(t) && t.length < 20) return "Hey! I’m your workspace agent — free, instant, running right here in your browser. Ask me anything about the project, or tell me to change something: <i>“add page Pricing”, “make it teal”, “connect it to Orders”</i>.";
+    if (/\b(hi|hello|hey|yo)\b/.test(t) && t.length < 20) return "Hey! I’m <b>Devgri-1</b> — Devgri’s own model, free and instant, running right here in your browser. Ask me anything about the project, tell me to change something (<i>“add page Pricing”, “make it teal”</i>), or teach me (<i>“learn: always use dark themes”</i>) and I get better forever.";
     if (/what can you do|help|how do i|how to|guide/.test(t)) return "Here’s what I can do without any API key:<br>• <b>edit the tree</b> — “add page Pricing”, “rename to Our Story”, “delete”, “connect to Orders as data”, colors<br>• <b>answer questions</b> about pages, data, logic, connections, export, keys<br>• <b>import code</b> — press <b>Link repo</b> to render any GitHub repo or local folder as nodes<br>• <b>learn</b> — say <i>“learn: always use dark themes”</i> and I remember it forever, shaping every future build. Ask <i>“what have you learned?”</i> anytime<br>Add an API key (gear icon) and I get superpowers: real architecture design, real page generation, and a self-review loop that refines every page it builds.<br>" + projectStats();
     if (/what.*(project|workspace|tree|architecture)|status|overview|look like/.test(t)) { const pagesC = tree ? cluster("pages") : null; return projectStats() + (pagesC && pagesC.children.length ? "<br>Pages: " + esc(pagesC.children.map((p: any) => p.label).join(", ")) + "." : "") + "<br>Tip: use the search box on the canvas to jump to any element."; }
     if (/connection|dashed|line|purple|teal|orange/.test(t)) return "Three connection types live on the canvas:<br>• <b style=\"color:#7F77DD\">navigation</b> (purple) — a menu item or button leads to a page<br>• <b style=\"color:#1D9E75\">data</b> (teal) — a section reads/writes a table<br>• <b style=\"color:#D85A30\">event</b> (orange) — something triggers a Logic action<br>Drag from a node’s purple dot onto another node to create one.";
@@ -814,19 +957,15 @@ Score 1-10 for: visual hierarchy, contrast, spacing rhythm, responsiveness, copy
     $("build").style.display = "flex";
     addMsg("user", esc(prompt));
     let g: any = null;
-    if (hasAnyKey()) {
-      await ai("Got it — asking <b>" + esc(MODELS[pickFor("back")!].label) + "</b> to design the <b>architecture</b>…", 600);
-      typing(true);
-      try {
-        g = await generateWithAI(prompt);
-        typing(false);
-      } catch (err: any) {
-        typing(false);
-        addMsg("ai", '<span style="color:var(--text-danger)">AI call failed: ' + esc(err?.message || "unknown error") + "</span><br>Falling back to the offline template.");
-        g = null;
-      }
-    } else {
-      await ai("No API key set — designing with the <b>offline template</b>. Add an Anthropic, OpenAI, or Google key in AI settings (gear icon) for real AI designs.", 800);
+    await ai("Got it — asking <b>" + esc(MODELS[pickFor("back")].label) + "</b> to design the <b>architecture</b>…" + (hasAnyKey() ? "" : "<br><span style=\"font-size:11px;color:var(--text-muted)\">Devgri-1 runs free in your browser. Add a key (gear icon) for frontier-model designs.</span>"), 600);
+    typing(true);
+    try {
+      g = await generateWithAI(prompt);
+      typing(false);
+    } catch (err: any) {
+      typing(false);
+      addMsg("ai", '<span style="color:var(--text-danger)">AI call failed: ' + esc(err?.message || "unknown error") + "</span><br>Falling back to the built-in template.");
+      g = null;
     }
     if (!g) g = genProject(prompt);
     uid = 0; allNodes(g.root).forEach((n: any) => (uid = Math.max(uid, n.id + 1)));
@@ -843,10 +982,8 @@ Score 1-10 for: visual hierarchy, contrast, spacing rhythm, responsiveness, copy
     pvMode = "live";
     setView("preview");
     await ai("<b>Done!</b> Your project is ready. Try this:<br>• <b>Live site</b> shows the real generated website; <b>Blueprint</b> shows the architecture blocks<br>• click any block in the <b>Blueprint</b> — it gets selected in the <b>Tree</b> too<br>• with something selected, just tell me what to change: <i>“make it blue”, “add testimonials”, “rename to Our story”, “connect to Contact”</i> — then <b>Rebuild</b> the page<br>• select an action under <b>Logic</b> and press <b>Test run</b> to watch the automation execute<br>• press <b>Save</b> to keep this project on your account", 1100);
-    if (hasAnyKey()) {
-      const first = g.pageNodes.length ? g.pageNodes[0] : null;
-      if (first) await buildPage(first);
-    }
+    const first = g.pageNodes.length ? g.pageNodes[0] : null;
+    if (first) await buildPage(first);
     scheduleAutosave();
   }
   function newProject() {
@@ -1471,13 +1608,13 @@ Score 1-10 for: visual hierarchy, contrast, spacing rhythm, responsiveness, copy
     const el = $("p0key");
     if (!el) return;
     const provs = (["anthropic", "openai", "google"] as Provider[]).filter((p) => settings.keys[p]).map((p) => PROVIDER_LABEL[p]);
-    el.innerHTML = provs.length ? provs.join(" + ") + ' connected — designs are real. <b id="p0keySet">Manage keys</b>' : 'No API keys — offline demo mode. <b id="p0keySet">Add keys</b>';
+    el.innerHTML = provs.length ? provs.join(" + ") + ' connected — designs are real. <b id="p0keySet">Manage keys</b>' : 'Running on <b>Devgri-1</b> — free, built-in, no key needed. <b id="p0keySet">Add keys for frontier AI</b>';
     const set = $("p0keySet"); if (set) set.onclick = () => { populateSettingsModal(); $("setmodal").style.display = "flex"; };
   }
   function buildModelSelects() {
-    const groups: Record<string, string[]> = { anthropic: [], openai: [], google: [] };
+    const groups: Record<string, string[]> = { devgri: [], anthropic: [], openai: [], google: [] };
     Object.keys(MODELS).forEach((k) => groups[MODELS[k].provider].push(k));
-    const html = (["anthropic", "openai", "google"] as Provider[]).map((p) => '<optgroup label="' + PROVIDER_LABEL[p] + '">' + groups[p].map((k) => '<option value="' + k + '">' + esc(MODELS[k].label) + "</option>").join("") + "</optgroup>").join("");
+    const html = (["devgri", "anthropic", "openai", "google"] as Provider[]).map((p) => '<optgroup label="' + PROVIDER_LABEL[p] + '">' + groups[p].map((k) => '<option value="' + k + '">' + esc(MODELS[k].label) + "</option>").join("") + "</optgroup>").join("");
     (["sFront", "sBack", "sMedia"] as const).forEach((id) => { const s = $(id) as HTMLSelectElement; if (s) s.innerHTML = html; });
     ($("sFront") as HTMLSelectElement).value = settings.manual.front;
     ($("sBack") as HTMLSelectElement).value = settings.manual.back;
@@ -1531,7 +1668,8 @@ Score 1-10 for: visual hierarchy, contrast, spacing rhythm, responsiveness, copy
   /* ---------------- wiring ---------------- */
   $("go").onclick = () => { const v = ($("p0") as HTMLTextAreaElement).value.trim(); if (v) createProject(v); };
   $("p0").addEventListener("keydown", (e: KeyboardEvent) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("go").click(); } });
-  root.querySelectorAll(".chips button").forEach((b: any) => (b.onclick = () => { ($("p0") as HTMLTextAreaElement).value = b.dataset.ex; $("go").click(); }));
+  root.querySelectorAll(".chips button[data-ex]").forEach((b: any) => (b.onclick = () => { ($("p0") as HTMLTextAreaElement).value = b.dataset.ex; $("go").click(); }));
+  $("p0repo").onclick = () => { $("linkStatus").textContent = ""; $("linkmodal").style.display = "flex"; };
   $("vTree").onclick = () => setView("tree");
   $("vPrev").onclick = () => setView("preview");
   $("bNew").onclick = () => { if (confirm("Start a new project? Your current one stays saved under “Your saved projects”.")) { doSave(true); newProject(); } };

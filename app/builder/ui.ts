@@ -128,7 +128,7 @@ export const BUILDER_HTML = `
 <div id="start">
   <div class="logo"><i class="ti ti-sparkles"></i></div>
   <h1>What do you want to build?</h1>
-  <p>Describe your project — Claude designs the architecture and builds it.</p>
+  <p>Describe your project — AI designs the architecture and builds the real site.</p>
   <div id="p0wrap">
     <textarea id="p0" placeholder="e.g. A bakery website with online ordering and a blog"></textarea>
     <div id="p0row"><span id="p0key">No API key — offline demo mode. <b id="p0keySet">Add key</b></span><button class="primary" id="go"><i class="ti ti-arrow-up"></i> Create project</button></div>
@@ -137,6 +137,7 @@ export const BUILDER_HTML = `
     <button data-ex="A bakery website with online ordering and a blog">Bakery with online ordering</button>
     <button data-ex="A project management dashboard with reports and team tracking">Project dashboard</button>
     <button data-ex="A portfolio site with gallery and booking for a photographer">Photographer portfolio</button>
+    <button id="p0repo" style="border-style:dashed;"><i class="ti ti-git-branch" style="font-size:12px;margin-right:4px;"></i>Or link a GitHub repo / folder</button>
   </div>
   <div id="projrow" style="display:none;flex-direction:column;align-items:center;gap:8px;">
     <span style="font-size:11px;color:var(--text-muted);">Your saved projects</span>
@@ -188,7 +189,7 @@ export const BUILDER_HTML = `
         <div style="display:flex;justify-content:center;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap;">
           <div class="seg"><button id="mBlue"><i class="ti ti-layout-list" style="font-size:13px"></i> Blueprint</button><button id="mLive" class="on"><i class="ti ti-world" style="font-size:13px"></i> Live site</button></div>
           <div class="seg"><button id="dDesk" class="on"><i class="ti ti-device-desktop" style="font-size:13px"></i> Desktop</button><button id="dMob"><i class="ti ti-device-mobile" style="font-size:13px"></i> Mobile</button></div>
-          <button class="primary" id="pBuild"><i class="ti ti-sparkles" style="font-size:13px"></i> <span id="pBuildTxt">Build page with Claude</span></button>
+          <button class="primary" id="pBuild"><i class="ti ti-sparkles" style="font-size:13px"></i> <span id="pBuildTxt">Build page with AI</span></button>
         </div>
         <div id="livetabs" style="display:none;justify-content:center;gap:6px;margin-bottom:12px;flex-wrap:wrap;"></div>
         <div id="site">
