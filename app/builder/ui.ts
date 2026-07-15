@@ -151,6 +151,7 @@ export const BUILDER_HTML = `
       <button id="vTree" class="on"><i class="ti ti-sitemap" style="font-size:14px"></i> Tree</button>
       <button id="vPrev"><i class="ti ti-eye" style="font-size:14px"></i> Preview</button>
     </div>
+    <button id="bLink" title="Import a GitHub repo or local folder as a node tree"><i class="ti ti-git-branch" style="font-size:15px"></i> Link repo</button>
     <button id="bUndo" title="Undo last change"><i class="ti ti-arrow-back-up" style="font-size:15px"></i> Undo</button>
     <span id="savewarn" style="display:none;align-items:center;gap:5px;font-size:11px;color:var(--text-danger);background:var(--bg-danger);border:1px solid var(--border-danger);border-radius:8px;padding:4px 10px;margin-left:8px;"></span>
     <span style="flex:1"></span>
@@ -220,6 +221,22 @@ export const BUILDER_HTML = `
       <div style="display:flex;gap:8px;align-items:center;margin:4px 0;"><span style="font-size:12px;width:110px;">Images and UI</span><select id="sMedia" class="mrsel" style="flex:1;"></select></div>
     </div>
     <button class="primary" id="setDone" style="width:100%;justify-content:center;margin-top:14px;">Done</button>
+  </div>
+</div>
+<div id="linkmodal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:15;align-items:center;justify-content:center;">
+  <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:14px;padding:20px;width:420px;max-width:92vw;">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;"><i class="ti ti-git-branch" style="font-size:18px;color:var(--text-accent)"></i><b>Link repository or folder</b><span style="flex:1"></span><button id="linkClose" title="Close">✕</button></div>
+    <div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px;">Public GitHub repository</div>
+    <div style="display:flex;gap:8px;">
+      <input type="text" id="ghUrl" placeholder="https://github.com/owner/repo" style="flex:1;">
+      <button class="primary" id="ghGo" style="padding:8px 14px;">Import</button>
+    </div>
+    <div style="font-size:12px;color:var(--text-secondary);margin:14px 0 6px;">Local folder (parsed in your browser — files never leave your machine)</div>
+    <input type="file" id="dirPick" style="width:100%;font-size:12px;" webkitdirectory directory multiple>
+    <div style="font-size:12px;color:var(--text-secondary);margin:14px 0 6px;">Or paste a file list / tree output</div>
+    <textarea id="pasteTree" rows="4" style="width:100%;" placeholder="src/index.ts&#10;src/lib/db.ts&#10;README.md"></textarea>
+    <button class="primary" id="pasteGo" style="width:100%;justify-content:center;margin-top:8px;">Parse pasted structure</button>
+    <p id="linkStatus" style="font-size:11px;color:var(--text-muted);margin-top:10px;min-height:14px;"></p>
   </div>
 </div>
 <div id="toast" role="status"></div>

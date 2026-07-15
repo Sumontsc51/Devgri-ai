@@ -51,15 +51,15 @@ export function initBuilder(root: HTMLElement, handles: BuilderHandles): void {
   const $ = (id: string) => root.querySelector<HTMLElement>("#" + id) as any;
   const esc = (s: any) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
 
-  const childOf: Record<string, string> = { project: "page", pages: "page", page: "section", sections: "section", section: "element", element: "element", menus: "menu item", "menu item": "sub-menu item", "sub-menu item": "sub-menu item", tools: "tool", tool: "option", option: "option", item: "item", datas: "table", table: "field", field: "field", logics: "action", action: "step", step: "step" };
-  const iconOf: Record<string, string> = { project: "ti-layout-dashboard", pages: "ti-files", page: "ti-file", sections: "ti-layout-list", section: "ti-layout-rows", element: "ti-box", menus: "ti-menu-2", "menu item": "ti-menu-2", "sub-menu item": "ti-corner-down-right", tools: "ti-tools", tool: "ti-tool", option: "ti-adjustments", item: "ti-box", datas: "ti-database", table: "ti-table", field: "ti-tag", logics: "ti-settings-automation", action: "ti-bolt", step: "ti-arrow-right" };
+  const childOf: Record<string, string> = { project: "page", pages: "page", page: "section", sections: "section", section: "element", element: "element", menus: "menu item", "menu item": "sub-menu item", "sub-menu item": "sub-menu item", tools: "tool", tool: "option", option: "option", item: "item", datas: "table", table: "field", field: "field", logics: "action", action: "step", step: "step", repo: "folder", folder: "file", file: "file" };
+  const iconOf: Record<string, string> = { project: "ti-layout-dashboard", pages: "ti-files", page: "ti-file", sections: "ti-layout-list", section: "ti-layout-rows", element: "ti-box", menus: "ti-menu-2", "menu item": "ti-menu-2", "sub-menu item": "ti-corner-down-right", tools: "ti-tools", tool: "ti-tool", option: "ti-adjustments", item: "ti-box", datas: "ti-database", table: "ti-table", field: "ti-tag", logics: "ti-settings-automation", action: "ti-bolt", step: "ti-arrow-right", repo: "ti-git-branch", folder: "ti-folder", file: "ti-file-code" };
   const COLORS: Record<string, string> = { blue: "#E6F1FB", green: "#EAF3DE", red: "#FCEBEB", purple: "#EEEDFE", pink: "#FBEAF0", teal: "#E1F5EE", amber: "#FAEEDA", orange: "#FAECE7", gray: "#F1EFE8", white: "#FFFFFF" };
   const COLORTX: Record<string, string> = { blue: "#0C447C", green: "#27500A", red: "#791F1F", purple: "#3C3489", pink: "#72243E", teal: "#085041", amber: "#633806", orange: "#712B13", gray: "#444441", white: "#1f1e1b" };
 
   const WHY: Record<string, string> = { front: "frontend", back: "backend and logic", media: "images and UI polish" };
   const settings: any = { keys: { anthropic: "", openai: "", google: "" }, mode: "auto", manual: { front: "sonnet", back: "opus", media: "haiku" } };
 
-  function domainOf(n: any) { if (n.type === "section" && /hero|gallery|image|banner/i.test(n.label)) return "media"; return ["datas", "table", "field", "logics", "action", "step", "tools", "tool", "option", "project"].indexOf(n.type) > -1 ? "back" : "front"; }
+  function domainOf(n: any) { if (n.type === "section" && /hero|gallery|image|banner/i.test(n.label)) return "media"; return ["datas", "table", "field", "logics", "action", "step", "tools", "tool", "option", "project", "repo", "folder", "file"].indexOf(n.type) > -1 ? "back" : "front"; }
   function hasAnyKey() { return !!(settings.keys.anthropic || settings.keys.openai || settings.keys.google); }
   function avail() { return Object.keys(MODELS).filter((k) => settings.keys[MODELS[k].provider]); }
   function pickFor(d: string): string | null {
@@ -291,6 +291,7 @@ Hard rules:
 - Include the site navigation bar listing EVERY page of the site. Each nav link must be exactly: <a href="#" data-page="PageName">PageName</a> (data-page = exact page name given). Mark the current page visually.
 - Implement EXACTLY the listed sections, in order, honoring each section's "need", its listed child elements, and user notes. Do not invent extra sections; if a section lists elements (e.g. a form's fields), implement every one of them.
 - Forms/buttons are visual only (no real submission).
+- [EMAIL], [PHONE] and [TOKEN] in the input are privacy-masked placeholders. NEVER print them literally — substitute a natural, fitting stand-in (e.g. hello@<sitename>.com, +1 (555) 012-3456).
 - After </html>, append ONE HTML comment reporting the structure you actually built, exactly:
 <!--STRUCTURE {"sections":[{"name":"Hero","need":"one-line summary of what it shows","elements":[{"name":"Headline"},{"name":"CTA button"}]}]}-->
 The comment's section/element names must match what is really on the page — this syncs the visual architecture tree.
@@ -311,7 +312,7 @@ Keep total output under 700 lines.`;
   const OPS_SYSTEM = `You are the architect model inside an AI app builder. You receive the project's element tree, its connections, the selected element, and a user instruction. Decide what to change and reply with ONLY raw JSON:
 {"reply":"short conversational confirmation (plain text, may name what you changed)",
  "ops":[
-  {"op":"add","parent":ID,"label":"...","type":"page|section|element|menu item|table|field|action|step|tool","need":"optional","how":"optional"},
+  {"op":"add","parent":ID,"label":"...","type":"page|section|element|menu item|table|field|action|step|tool|folder|file","need":"optional","how":"optional"},
   {"op":"rename","id":ID,"label":"..."},
   {"op":"delete","id":ID},
   {"op":"color","id":ID,"color":"blue|green|red|purple|pink|teal|amber|orange|gray|white"},
@@ -322,7 +323,7 @@ Keep total output under 700 lines.`;
   {"op":"connect","from":ID,"to":ID,"type":"nav|data|event","label":"optional"},
   {"op":"disconnect","from":ID,"to":ID}
  ]}
-Rules: IDs must come from the given tree. Use the selected element when the instruction says "it"/"this". Prefer small precise ops; use several ops for compound requests. If the request is a styling/content wish that maps to no structural op, use "note" on the target element and explain in reply. Empty ops array is allowed for pure questions — answer in reply.`;
+Rules: IDs must come from the given tree. Use the selected element when the instruction says "it"/"this". [EMAIL], [PHONE] and [TOKEN] in the input are privacy-masked placeholders — never store them literally; substitute a natural fitting stand-in. Prefer small precise ops; use several ops for compound requests. If the request is a styling/content wish that maps to no structural op, use "note" on the target element and explain in reply. Empty ops array is allowed for pure questions — answer in reply.`;
 
   function treeContext() {
     const list = allNodes(tree).map((n) => { const p = findParent(tree, n.id); return { id: n.id, parent: p ? p.id : null, type: n.type, label: n.label }; });
@@ -538,7 +539,7 @@ Under 220 lines.`;
     tabs.style.display = showLive ? "flex" : "none";
     updateBuildBtn(pg);
     if (!showLive) return;
-    const pagesC = cluster("pages");
+    const pagesC = cluster("pages") || { children: [] };
     tabs.innerHTML = pagesC.children.map((p: any) => '<button data-ltab="' + p.id + '" style="font-size:12px;border:1px solid var(--border);background:' + (p.id === curPage ? "var(--fill-accent)" : "var(--surface-2)") + ";color:" + (p.id === curPage ? "#fff" : "var(--text-secondary)") + ';border-radius:14px;padding:4px 11px;">' + esc(p.label) + (p.html ? "" : " ·") + "</button>").join("");
     tabs.querySelectorAll("[data-ltab]").forEach((b: any) => (b.onclick = () => { curPage = +b.dataset.ltab; const p2 = find(tree, curPage); renderPreview(); if (p2 && !p2.html) buildPage(p2); }));
     const frame = $("siteFrame") as HTMLIFrameElement;
@@ -551,12 +552,144 @@ Under 220 lines.`;
     }
   }
   window.addEventListener("message", (e: MessageEvent) => {
+    if (!root.isConnected) return; /* page navigated away */
     const p = e.data && (e.data as any).devgriNav;
     if (!p || !tree) return;
     const pagesC = cluster("pages");
+    if (!pagesC) return;
     const pg = pagesC.children.find((x: any) => x.label.toLowerCase() === String(p).toLowerCase());
     if (pg) { curPage = pg.id; renderPreview(); if (!pg.html) buildPage(pg); }
   });
+
+  /* ---------------- repo / folder import → node tree ---------------- */
+  const IGNORE_DIRS = /^(\.git|node_modules|\.next|dist|build|vendor|__pycache__|\.venv|coverage)$/;
+  const MAX_IMPORT = 400;
+
+  function buildTreeFromPaths(rootLabel: string, paths: string[]): any {
+    const repo = node(rootLabel, "repo", paths.length + " entries imported.", "A linked repository. Every file and folder is a node — select one and chat with it.");
+    const dirIndex = new Map<string, any>();
+    dirIndex.set("", repo);
+    let count = 0, skipped = 0;
+    const cleaned = paths
+      .map((p) => p.replace(/\\/g, "/").replace(/^\.\//, "").replace(/^\/+|\/+$/g, ""))
+      .filter((p) => p && !p.split("/").some((seg) => IGNORE_DIRS.test(seg)))
+      .sort();
+    for (const p of cleaned) {
+      if (count >= MAX_IMPORT) { skipped++; continue; }
+      const parts = p.split("/");
+      let dirPath = "";
+      let parent = repo;
+      for (let i = 0; i < parts.length - 1; i++) {
+        dirPath = dirPath ? dirPath + "/" + parts[i] : parts[i];
+        let dir = dirIndex.get(dirPath);
+        if (!dir) {
+          dir = node(parts[i], "folder", "", "Folder from the linked source.");
+          dirIndex.set(dirPath, dir);
+          parent.children.push(dir);
+          count++;
+        }
+        parent = dir;
+      }
+      const leaf = parts[parts.length - 1];
+      if (!parent.children.some((c: any) => c.label === leaf && c.type === "file")) {
+        parent.children.push(node(leaf, "file", "", "File from the linked source."));
+        count++;
+      }
+    }
+    if (skipped) repo.need = count + " nodes shown · " + skipped + " more entries truncated (limit " + MAX_IMPORT + ").";
+    return repo;
+  }
+
+  function mountImportedTree(repoNode: any) {
+    snap();
+    if (!tree) {
+      tree = node(repoNode.label, "project", "Imported workspace.", "A linked repository rendered as a living node tree.");
+      conns = [];
+      $("start").style.display = "none";
+      $("build").style.display = "flex";
+      $("pnameTxt").textContent = tree.label;
+    }
+    /* replace a previous import with the same name, else append */
+    tree.children = tree.children.filter((c: any) => !(c.type === "repo" && c.label === repoNode.label));
+    tree.children.push(repoNode);
+    open.add(tree.id); open.add(repoNode.id);
+    repoNode.children.forEach((c: any) => { if (c.type === "folder") open.add(c.id); });
+    sel = repoNode.id;
+    setView("tree");
+    renderAll(); fit();
+    addMsg("ai", "🌳 Linked <b>" + esc(repoNode.label) + "</b> — " + count(repoNode) + " nodes on the canvas. Click any file or folder and talk to it in the panel on the right, or ask me here: <i>“what does this repo look like?”</i>");
+    scheduleAutosave();
+  }
+
+  async function importGithub(url: string) {
+    const m = url.trim().match(/github\.com\/([^/\s]+)\/([^/\s#?]+)/i) || url.trim().match(/^([\w.-]+)\/([\w.-]+)$/);
+    if (!m) { $("linkStatus").textContent = "Enter a GitHub URL like https://github.com/owner/repo"; return; }
+    const owner = m[1], repo = m[2].replace(/\.git$/, "");
+    $("linkStatus").textContent = "Fetching " + owner + "/" + repo + "…";
+    try {
+      const meta = await fetch("https://api.github.com/repos/" + owner + "/" + repo).then((r) => { if (!r.ok) throw new Error(r.status === 404 ? "Repository not found (private repos aren’t supported)" : "GitHub error HTTP " + r.status); return r.json(); });
+      const branch = meta.default_branch || "main";
+      const treeJson = await fetch("https://api.github.com/repos/" + owner + "/" + repo + "/git/trees/" + encodeURIComponent(branch) + "?recursive=1").then((r) => { if (!r.ok) throw new Error("Could not read the file tree (HTTP " + r.status + ")"); return r.json(); });
+      const paths = (treeJson.tree || []).filter((e: any) => e.type === "blob").map((e: any) => e.path);
+      if (!paths.length) throw new Error("Repository appears to be empty");
+      $("linkmodal").style.display = "none";
+      $("linkStatus").textContent = "";
+      mountImportedTree(buildTreeFromPaths(owner + "/" + repo, paths));
+    } catch (err: any) {
+      $("linkStatus").textContent = "✗ " + (err?.message || "Import failed");
+    }
+  }
+
+  function importLocalFiles(files: FileList | null) {
+    if (!files || !files.length) return;
+    const paths: string[] = [];
+    for (let i = 0; i < files.length; i++) {
+      const f: any = files[i];
+      paths.push(f.webkitRelativePath || f.name);
+    }
+    const rootLabel = (files[0] as any).webkitRelativePath ? String((files[0] as any).webkitRelativePath).split("/")[0] : "Local files";
+    /* strip the shared root folder from paths so it becomes the repo node */
+    const stripped = paths.map((p) => (p.startsWith(rootLabel + "/") ? p.slice(rootLabel.length + 1) : p));
+    $("linkmodal").style.display = "none";
+    mountImportedTree(buildTreeFromPaths(rootLabel, stripped));
+  }
+
+  function importPasted(text: string) {
+    /* accepts plain path lists and `tree`-style output */
+    const paths = text.split(/\r?\n/)
+      .map((l) => l.replace(/^[\s│├└─|`+-]+/g, "").trim())
+      .filter((l) => l && !/^\d+ (directories|files)/.test(l));
+    if (!paths.length) { $("linkStatus").textContent = "Paste at least one path"; return; }
+    $("linkmodal").style.display = "none";
+    $("linkStatus").textContent = "";
+    mountImportedTree(buildTreeFromPaths("Pasted structure", paths));
+  }
+
+  /* ---------------- free local agent (no API key, no cost) ---------------- */
+  function projectStats(): string {
+    if (!tree) return "";
+    const pagesC = cluster("pages"), datasC = cluster("datas"), logicsC = cluster("logics");
+    const repos = tree.children.filter((c: any) => c.type === "repo");
+    return "Right now: <b>" + count(tree) + "</b> elements" +
+      (pagesC ? ", " + pagesC.children.length + " pages" : "") +
+      (datasC && datasC.children.length ? ", " + datasC.children.length + " tables" : "") +
+      (logicsC && logicsC.children.length ? ", " + logicsC.children.length + " actions" : "") +
+      (repos.length ? ", " + repos.length + " linked repo" + (repos.length > 1 ? "s" : "") : "") + ".";
+  }
+  function localBrain(text: string): string | null {
+    const t = text.toLowerCase();
+    if (/\b(hi|hello|hey|yo)\b/.test(t) && t.length < 20) return "Hey! I’m your workspace agent — free, instant, running right here in your browser. Ask me anything about the project, or tell me to change something: <i>“add page Pricing”, “make it teal”, “connect it to Orders”</i>.";
+    if (/what can you do|help|how do i|how to|guide/.test(t)) return "Here’s what I can do without any API key:<br>• <b>edit the tree</b> — “add page Pricing”, “rename to Our Story”, “delete”, “connect to Orders as data”, colors<br>• <b>answer questions</b> about pages, data, logic, connections, export, keys<br>• <b>import code</b> — press <b>Link repo</b> to render any GitHub repo or local folder as nodes<br>Add an API key (gear icon) and I get superpowers: real architecture design and real page generation.<br>" + projectStats();
+    if (/what.*(project|workspace|tree|architecture)|status|overview|look like/.test(t)) { const pagesC = tree ? cluster("pages") : null; return projectStats() + (pagesC && pagesC.children.length ? "<br>Pages: " + esc(pagesC.children.map((p: any) => p.label).join(", ")) + "." : "") + "<br>Tip: use the search box on the canvas to jump to any element."; }
+    if (/connection|dashed|line|purple|teal|orange/.test(t)) return "Three connection types live on the canvas:<br>• <b style=\"color:#7F77DD\">navigation</b> (purple) — a menu item or button leads to a page<br>• <b style=\"color:#1D9E75\">data</b> (teal) — a section reads/writes a table<br>• <b style=\"color:#D85A30\">event</b> (orange) — something triggers a Logic action<br>Drag from a node’s purple dot onto another node to create one.";
+    if (/export|download|zip|deploy|host/.test(t)) return "Press <b>Export</b> (top right) to download every built page as a static site — index.html plus one file per page, nav wired up. Drop the folder on Vercel, Netlify, or GitHub Pages and it’s live.";
+    if (/key|byok|api|token|cost|price|mask/.test(t)) return "This chat is free — it runs locally, zero tokens. For real AI designs, add your own Anthropic, OpenAI, or Google key in AI settings (gear icon). Keys stay in your browser, prompts are PII-masked before they leave, and the badge at the bottom tracks every cent.";
+    if (/run|test|logic|action|automation/.test(t)) return "Select any action under <b>Logic</b> and press <b>Test run</b> — you’ll see the flow execute step by step across the canvas. (Runs are simulated in this version; real execution is on the roadmap.)";
+    if (/repo|github|folder|import|link/.test(t)) return "Press <b>Link repo</b> in the top bar. I can pull any public GitHub repository, read a local folder (files never leave your machine), or parse a pasted file list — and render it as a living node tree you can explore and chat with.";
+    if (/preview|live|blueprint|site/.test(t)) return "The Preview has two modes: <b>Blueprint</b> (structural blocks you can click and edit) and <b>Live site</b> (the real generated website). Building the live site needs an API key; the blueprint is always free.";
+    if (/\?$|^(what|how|why|who|where|when|can|does|is|are)\b/.test(t)) return "Good question — here’s what I know: this workspace turns ideas into an architecture tree (pages, sections, data, logic), lets you edit it by chatting, and builds the real site when a key is connected. " + projectStats() + "<br>Try asking about <i>connections, export, keys, or the preview</i> — or just tell me what to change.";
+    return null;
+  }
 
   /* ---------------- chat ---------------- */
   function addMsg(role: string, html: string) {
@@ -627,7 +760,7 @@ Under 220 lines.`;
   function restoreProject(saved: { tree: any; conns: any[] }) {
     $("msgs").innerHTML = ""; lastFrameKey = "";
     tree = saved.tree; conns = saved.conns || [];
-    allNodes(tree).forEach((n: any) => { n.notes = n.notes || []; n.children = n.children || []; uid = Math.max(uid, n.id + 1); });
+    allNodes(tree).forEach((n: any) => { n.notes = n.notes || []; n.children = n.children || []; n._busy = false; uid = Math.max(uid, n.id + 1); });
     open = new Set([tree.id]); const pc = cluster("pages"); if (pc) open.add(pc.id);
     sel = tree.id; curPage = pc && pc.children.length ? pc.children[0].id : null;
     $("start").style.display = "none"; $("build").style.display = "flex";
@@ -641,6 +774,11 @@ Under 220 lines.`;
     const n = sel != null ? find(tree, sel) : null;
     const t = text.toLowerCase();
     let m: RegExpMatchArray | null;
+    /* conversational questions → free local agent, no tree mutation */
+    if (!/^(add|create|delete|remove|rename|connect)\b/.test(t)) {
+      const brain = localBrain(text);
+      if (brain && !(n && /\b(blue|green|red|purple|pink|teal|amber|orange|gray|white)\b/.test(t))) { await ai(brain, 600); return; }
+    }
     snap();
     if ((m = t.match(/^(?:add|create)\s+(?:a\s+|an\s+)?(.+)$/))) {
       let label = m[1].trim(), target = n || tree;
@@ -833,15 +971,26 @@ Under 220 lines.`;
     if (!n) { p.innerHTML = '<div class="sec hint">Select an element in the tree or preview to edit it here.</div>'; return; }
     const ct = childOf[n.type] || "item";
     const myConns = conns.map((c, i) => ({ ...c, i })).filter((c) => c.from === n.id || c.to === n.id);
+    const chat = (n.chat = n.chat || []);
+    const chatHtml = (chat.length
+      ? chat.map((m: any) => '<div style="display:flex;justify-content:' + (m.role === "user" ? "flex-end" : "flex-start") + ';margin-top:5px;"><div style="max-width:92%;font-size:12px;line-height:1.5;padding:6px 9px;border-radius:10px;white-space:pre-wrap;' + (m.role === "user" ? "background:var(--bg-accent);color:var(--text-accent);border-bottom-right-radius:3px;" : "background:var(--surface-1);border:1px solid var(--border);border-bottom-left-radius:3px;") + '">' + m.html + "</div></div>").join("")
+      : '<div style="display:flex;justify-content:flex-start;margin-top:5px;"><div style="max-width:92%;font-size:12px;line-height:1.5;padding:6px 9px;border-radius:10px;background:var(--surface-1);border:1px solid var(--border);border-bottom-left-radius:3px;">' + nodeOpener(n) + "</div></div>")
+      + (n._busy ? '<div style="margin-top:5px;"><span class="dots"><span></span><span></span><span></span></span></div>' : "");
     p.innerHTML =
       '<div class="sec"><div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">'
       + '<i class="ti ' + kicon(n) + '" style="font-size:20px;color:var(--text-accent)" aria-hidden="true"></i><span class="chip">' + esc(n.type) + '</span><span class="chip" style="background:var(--surface-1);color:var(--text-secondary);text-transform:none;" title="' + esc(whyOf(n)) + '"><i class="ti ti-cpu" style="font-size:11px;margin-right:3px;"></i>' + esc(modelOf(n)) + "</span></div>"
       + '<label class="flabel">Name</label><input type="text" id="fN" value="' + esc(n.label) + '" style="width:100%;">'
-      + '<label class="flabel">What it needs</label><textarea id="fD" rows="2" style="width:100%;">' + esc(n.need || "") + "</textarea>"
-      + '<label class="flabel">How it works</label><textarea id="fH" rows="2" style="width:100%;">' + esc(n.how || "") + "</textarea>"
-      + (n.type === "section" ? '<label class="flabel">Color (vibe)</label><div class="swatches">' + Object.keys(COLORS).map((c) => '<button class="sw" data-c="' + c + '" title="' + c + '" style="background:' + COLORS[c] + ';"></button>').join("") + "</div>" : "")
-      + (n.type === "action" ? '<label class="flabel">Trigger</label><input type="text" id="fTrig" value="' + esc(n.trigger || "Manual") + '" style="width:100%;"><button class="primary" id="runBtn" style="width:100%;justify-content:center;margin-top:10px;"><i class="ti ti-player-play"></i> Test run</button>' + (n.runs && n.runs.length ? '<div class="hint" style="margin-top:6px;">Last run: ' + esc(n.runs[n.runs.length - 1]) + " · total runs: " + n.runs.length + "</div>" : "") : "")
+      + (n.need ? '<p class="hint" style="margin-top:7px;">' + esc(n.need) + "</p>" : "")
+      + (n.type === "action" ? '<button class="primary" id="runBtn" style="width:100%;justify-content:center;margin-top:10px;"><i class="ti ti-player-play"></i> Test run</button>' + (n.runs && n.runs.length ? '<div class="hint" style="margin-top:6px;">Last run: ' + esc(n.runs[n.runs.length - 1]) + " · total runs: " + n.runs.length + "</div>" : "") : "")
       + "</div>"
+      /* node-specific chat — the form is gone, talk to the element instead */
+      + '<div class="sec" style="display:flex;flex-direction:column;">'
+      + '<label class="flabel" style="margin-top:0;display:flex;align-items:center;gap:5px;"><i class="ti ti-message-circle" style="font-size:12px;color:var(--text-accent)"></i>Talk to this ' + esc(n.type) + "</label>"
+      + '<div id="nchat" style="max-height:180px;overflow-y:auto;padding:2px 0;">' + chatHtml + "</div>"
+      + '<div style="display:flex;gap:6px;margin-top:8px;">'
+      + '<textarea id="nchatIn" rows="1" placeholder="Change it, ask it, style it…" style="flex:1;min-height:34px;font-size:12px;"></textarea>'
+      + '<button class="primary" id="nchatSend" style="padding:7px 10px;" ' + (n._busy ? "disabled" : "") + '><i class="ti ti-arrow-up" style="font-size:13px"></i></button>'
+      + "</div></div>"
       + '<div class="sec">'
       + '<button class="primary" id="pAdd" style="width:100%;justify-content:center;"><i class="ti ti-plus"></i> Add ' + esc(ct) + "</button>"
       + '<button id="pConn" style="width:100%;justify-content:center;margin-top:6px;border:1px solid var(--border);"><i class="ti ti-plug-connected"></i> Connect to…</button>'
@@ -853,14 +1002,9 @@ Under 220 lines.`;
       + '<div class="sec"><label class="flabel" style="margin-top:0;">Inside (' + n.children.length + ")</label>"
       + (n.children.length ? n.children.map((c: any) => '<div class="childrow" data-j="' + c.id + '"><i class="ti ' + (iconOf[c.type] || "ti-box") + '" style="font-size:14px;color:var(--text-secondary)"></i><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(c.label) + "</span>" + (c.children.length ? '<span style="font-size:10px;color:var(--text-muted);">' + c.children.length + "</span>" : "") + "</div>").join("") : '<div class="hint">Nothing yet.</div>')
       + "</div>"
-      + (n.notes.length ? '<div class="sec"><label class="flabel" style="margin-top:0;">Build notes (' + n.notes.length + ")</label>" + n.notes.map((t: string) => '<div class="hint" style="margin-top:4px;">• ' + esc(t) + "</div>").join("") + "</div>" : "")
       + '<div class="sec hint" style="border-bottom:none;margin-top:auto;">Total elements: ' + count(tree) + "</div>";
     ($("fN") as HTMLInputElement).oninput = (e: any) => { n.label = e.target.value; touchPage(n); const s = root.querySelector('.node[data-id="' + n.id + '"] .lb'); if (s) s.textContent = n.label; };
     ($("fN") as HTMLInputElement).onchange = () => renderAll();
-    ($("fD") as HTMLTextAreaElement).oninput = (e: any) => { n.need = e.target.value; touchPage(n); };
-    ($("fH") as HTMLTextAreaElement).oninput = (e: any) => (n.how = e.target.value);
-    ($("fD") as HTMLTextAreaElement).onchange = () => renderPreview();
-    const tg = $("fTrig"); if (tg) (tg as HTMLInputElement).oninput = (e: any) => { n.trigger = e.target.value; };
     const rb = $("runBtn"); if (rb) rb.onclick = () => runFlow(n);
     $("pAdd").onclick = () => { const k = nodeAdd(n); select(k.id); };
     $("pConn").onclick = () => { connectFrom = n.id; $("connFrom").textContent = n.label; $("connectbar").style.display = "flex"; renderTree(); toast("Click a target in the tree or preview"); };
@@ -868,7 +1012,93 @@ Under 220 lines.`;
     p.querySelectorAll("[data-j]").forEach((el: any) => (el.onclick = () => select(+el.dataset.j)));
     p.querySelectorAll("[data-go]").forEach((el: any) => (el.onclick = () => select(+el.dataset.go)));
     p.querySelectorAll("[data-rm]").forEach((el: any) => (el.onclick = () => { snap(); conns.splice(+el.dataset.rm, 1); renderAll(); }));
-    p.querySelectorAll(".sw").forEach((el: any) => (el.onclick = () => { snap(); n.color = el.dataset.c; touchPage(n); renderAll(); }));
+    /* node chat wiring */
+    const nc = $("nchat"); if (nc) nc.scrollTop = nc.scrollHeight;
+    const nIn = $("nchatIn") as HTMLTextAreaElement;
+    const nSend = () => { const v = nIn.value.trim(); if (!v || n._busy) return; nIn.value = ""; sendNodeChat(n, v); };
+    $("nchatSend").onclick = nSend;
+    nIn.addEventListener("keydown", (e: KeyboardEvent) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); nSend(); } });
+  }
+
+  /* -------- node-specific chat: contextual openers + handlers -------- */
+  function nodeOpener(n: any): string {
+    const L = esc(n.label);
+    switch (n.type) {
+      case "project": return "This is the whole project. Tell me the big picture — “make it a dark, premium brand” or “add a Pricing page” — and I’ll reshape the tree.";
+      case "page": return "What’s <b>" + L + "</b> for? Describe its goal, or say “add hero”, “add testimonials”, “make it teal”.";
+      case "section": return /hero/i.test(n.label) ? "What should the <b>headline</b> say — and what’s the one action a visitor should take here?" : "Describe what <b>" + L + "</b> should show — copy, layout, vibe. I’ll wire it in.";
+      case "element": return "What should <b>" + L + "</b> contain or do? Plain words are fine.";
+      case "table": return "Which fields does <b>" + L + "</b> need? e.g. “fields: name, price, image” — or ask what connects to it.";
+      case "field": return "What kind of data lives in <b>" + L + "</b>? Type, validation, example value…";
+      case "action": return "When should <b>" + L + "</b> fire, and what should happen step by step? You can also press <b>Test run</b> above.";
+      case "step": return "What exactly should this step do? Describe it and I’ll refine it.";
+      case "tool": return "How should <b>" + L + "</b> behave across the app? Describe the rules.";
+      case "menu item": return "Where should <b>" + L + "</b> lead? Say “connect to Pricing” or rename it.";
+      case "repo": return "A living repo tree. Ask me about its structure, or say “add folder docs” — every file here is chattable.";
+      case "folder": return "What’s in <b>" + L + "</b>? Ask, or say “add file utils.ts”.";
+      case "file": return "What’s <b>" + L + "</b>’s job in the codebase? I’ll keep its notes — or rename/connect it by chat.";
+      default: return "Tell me what to do with <b>" + L + "</b> — change it, describe it, connect it.";
+    }
+  }
+  function nodeSay(n: any, role: string, html: string) {
+    n.chat = n.chat || [];
+    n.chat.push({ role, html });
+    if (n.chat.length > 40) n.chat.shift();
+  }
+  async function sendNodeChat(n: any, text: string) {
+    nodeSay(n, "user", esc(text));
+    if (!hasAnyKey()) { localNodeChat(n, text); return; }
+    n._busy = true; renderProps();
+    try {
+      const mk = pickFor(domainOf(n))!;
+      const userMsg = "PROJECT STATE:\n" + treeContext() + "\n\nSELECTED ELEMENT: " + n.id + " (" + n.type + " “" + n.label + "”)\n\nThe user is chatting INSIDE this element’s panel. Apply the instruction to this element or its children ONLY, unless it explicitly names another element.\n\nUSER INSTRUCTION:\n" + text;
+      const out = await callAndParse(mk, OPS_SYSTEM, userMsg, (raw) => {
+        const o = extractJson(raw);
+        if (typeof o.reply !== "string") throw new Error("missing reply field");
+        return o;
+      });
+      snap();
+      const applied = applyOps(Array.isArray(out.ops) ? out.ops : []);
+      nodeSay(n, "ai", esc(String(out.reply || "Done.")) + (applied ? ' <span style="color:var(--text-muted);font-size:10px;">(' + applied + " change" + (applied === 1 ? "" : "s") + " · " + esc(MODELS[mk].label) + ")</span>" : ""));
+      n._busy = false;
+      if (applied) { renderAll(); scheduleAutosave(); } else renderProps();
+    } catch (err: any) {
+      n._busy = false;
+      nodeSay(n, "ai", '<span style="color:var(--text-danger)">AI call failed: ' + esc(err?.message || "unknown") + "</span> — try again, or simple commands work offline.");
+      renderProps();
+    }
+  }
+  function localNodeChat(n: any, text: string) {
+    const t = text.toLowerCase();
+    let m: RegExpMatchArray | null;
+    let reply: string;
+    if ((m = t.match(/\b(blue|green|red|purple|pink|teal|amber|orange|gray|white)\b/)) && (n.type === "section" || n.type === "element")) {
+      snap(); n.color = m[1]; touchPage(n);
+      reply = "Done — <b>" + esc(n.label) + "</b> is " + m[1] + " now. Check the preview.";
+    } else if ((m = t.match(/rename(?:\s+.*)?\s+to\s+(.+)/))) {
+      snap(); const old = n.label; n.label = cap(m[1].trim()); touchPage(n);
+      reply = "Renamed <b>" + esc(old) + "</b> → <b>" + esc(n.label) + "</b>.";
+    } else if ((m = t.match(/^(?:add|create)\s+(?:a\s+|an\s+)?(.+)$/))) {
+      snap(); const ct2 = childOf[n.type] || "item"; const k = node(cap(m[1].trim()), ct2, "", "Added by node chat."); n.children.push(k); open.add(n.id); touchPage(k);
+      reply = "Added <b>" + esc(k.label) + "</b> (" + ct2 + ") inside. Select it to give it details.";
+    } else if ((m = t.match(/connect(?:\s+(?:it|this))?(?:\s+to)?\s+(.+?)(?:\s+as\s+(nav|navigation|data|event))?$/))) {
+      const target = byLabel(m[1].trim());
+      if (target && target.id !== n.id) { snap(); const tp = m[2] ? (m[2] === "navigation" ? "nav" : m[2]) : "nav"; conns.push({ from: n.id, to: target.id, type: tp }); reply = "Connected to <b>" + esc(target.label) + "</b> as <b>" + tp + "</b>."; }
+      else reply = "I couldn’t find “" + esc(m[1].trim()) + "” — use the exact name from the tree.";
+    } else if ((m = t.match(/^fields?\s*[:\-]\s*(.+)$/)) && n.type === "table") {
+      snap(); n.need = "Fields: " + m[1].trim() + ".";
+      reply = "Locked in — <b>" + esc(n.label) + "</b> now needs: " + esc(m[1].trim()) + ".";
+    } else if (/\?$|^(what|how|why|who|where|when|can|does|is|are)\b/.test(t)) {
+      const kids = n.children.length ? "Inside it: " + esc(n.children.map((c: any) => c.label).slice(0, 8).join(", ")) + (n.children.length > 8 ? "…" : "") + ". " : "";
+      reply = "<b>" + esc(n.label) + "</b> is a " + esc(n.type) + ". " + (n.need ? esc(n.need) + " " : "") + kids + (localBrain(text) ? "<br>" + localBrain(text) : "");
+    } else {
+      snap();
+      if (!n.need) { n.need = cap(text); reply = "Got it — <b>" + esc(n.label) + "</b> now needs: “" + esc(text) + "”. It’ll shape the next build."; }
+      else { n.notes.push(text); reply = "Noted on <b>" + esc(n.label) + "</b>: “" + esc(text) + "”. Add an API key (gear) and I’ll apply changes like this for real."; }
+      touchPage(n);
+    }
+    nodeSay(n, "ai", reply);
+    renderAll();
   }
   function nodeAdd(parent: any) {
     snap();
@@ -968,6 +1198,7 @@ Under 220 lines.`;
     drag = true; mv = 0; lx = e.clientX; ly = e.clientY; tv.style.cursor = "grabbing";
   });
   const onMove = (e: MouseEvent) => {
+    if (!root.isConnected) return; /* page navigated away */
     if (linking) {
       const r = tv.getBoundingClientRect();
       const wx = (e.clientX - r.left - panX) / scale, wy = (e.clientY - r.top - panY) / scale;
@@ -981,6 +1212,7 @@ Under 220 lines.`;
     if (!drag) return; const dx = e.clientX - lx, dy = e.clientY - ly; mv += Math.abs(dx) + Math.abs(dy); panX += dx; panY += dy; lx = e.clientX; ly = e.clientY; tf();
   };
   const onUp = (e: MouseEvent) => {
+    if (!root.isConnected) return; /* page navigated away */
     if (linking) {
       const gl = root.querySelector("#ghostline"); if (gl) gl.remove();
       const hit = document.elementFromPoint(e.clientX, e.clientY);
@@ -1024,7 +1256,7 @@ Under 220 lines.`;
   /* ---------------- undo ---------------- */
   const hist: string[] = [];
   function snap() { hist.push(JSON.stringify({ t: tree, c: conns })); if (hist.length > 30) hist.shift(); scheduleAutosave(); }
-  function undo() { if (!hist.length) { toast("Nothing to undo"); return; } const s = JSON.parse(hist.pop()!); tree = s.t; conns = s.c; if (sel != null && !find(tree, sel)) sel = tree.id; if (curPage != null && !find(tree, curPage)) curPage = null; renderAll(); toast("Undone"); }
+  function undo() { if (!hist.length) { toast("Nothing to undo"); return; } const s = JSON.parse(hist.pop()!); tree = s.t; conns = s.c; if (sel != null && !find(tree, sel)) sel = tree.id; if (curPage != null && !find(tree, curPage)) curPage = null; lastFrameKey = ""; renderAll(); toast("Undone"); scheduleAutosave(); }
 
   /* ---------------- save / autosave / projects ---------------- */
   let currentProjectId: string | null = null;
@@ -1084,7 +1316,7 @@ Under 220 lines.`;
   function slugOf(l: string) { return l.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "page"; }
   async function exportSite() {
     if (!tree) { toast("Nothing to export yet"); return; }
-    const pages = cluster("pages").children;
+    const pages = (cluster("pages") || { children: [] }).children;
     const built = pages.filter((p: any) => p.html);
     if (!built.length) { toast("No pages built yet — build the live site first"); return; }
     toast("Packing site…");
@@ -1226,11 +1458,17 @@ Under 220 lines.`;
   $("mBlue").onclick = () => { pvMode = "blueprint"; $("mBlue").classList.add("on"); $("mLive").classList.remove("on"); renderPreview(); };
   $("mLive").onclick = () => { pvMode = "live"; $("mLive").classList.add("on"); $("mBlue").classList.remove("on"); renderPreview(); };
   $("pBuild").onclick = () => { const pg = curPage != null ? find(tree, curPage) : null; if (pg) buildPage(pg); };
+  $("bLink").onclick = () => { $("linkStatus").textContent = ""; $("linkmodal").style.display = "flex"; };
+  $("linkClose").onclick = () => { $("linkmodal").style.display = "none"; };
+  $("ghGo").onclick = () => importGithub(($("ghUrl") as HTMLInputElement).value);
+  $("ghUrl").addEventListener("keydown", (e: KeyboardEvent) => { if (e.key === "Enter") { e.preventDefault(); $("ghGo").click(); } });
+  ($("dirPick") as HTMLInputElement).onchange = (e: any) => importLocalFiles(e.target.files);
+  $("pasteGo").onclick = () => importPasted(($("pasteTree") as HTMLTextAreaElement).value);
   $("bSet").onclick = () => { populateSettingsModal(); $("setmodal").style.display = "flex"; };
   $("setDone").onclick = applySettings;
   $("setClose").onclick = () => { $("setmodal").style.display = "none"; }; /* cancel, don't apply */
   root.querySelectorAll("input[name=rmode]").forEach((r: any) => (r.onchange = () => { const man = ($("mMan") as HTMLInputElement).checked; $("manrows").style.opacity = man ? "1" : ".45"; $("manrows").style.pointerEvents = man ? "auto" : "none"; }));
-  window.addEventListener("resize", () => { if (view === "tree") fit(); });
+  window.addEventListener("resize", () => { if (root.isConnected && view === "tree" && tree) fit(); });
   loadSettings();
   refreshKeyHint();
   buildModelSelects();
