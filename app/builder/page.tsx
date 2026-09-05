@@ -6,9 +6,35 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import type { Session } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 import { BUILDER_CSS, BUILDER_HTML } from "./ui";
 import { initBuilder, type ProjectRow } from "./engine";
+
+/* getSession() can legitimately return null for a beat right after a
+   redirect, while the client is still reading the persisted session out of
+   storage (and while an email link's tokens are still being parsed out of
+   the URL). Bouncing to /login on that first null is what produces the
+   "it logs me in and throws me straight back out" loop, so wait for the
+   auth client to actually settle before giving up. */
+async function resolveSession(timeoutMs = 2500): Promise<Session | null> {
+  const { data } = await supabase.auth.getSession();
+  if (data.session) return data.session;
+
+  return new Promise<Session | null>((resolve) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session) {
+        clearTimeout(timer);
+        sub.subscription.unsubscribe();
+        resolve(session);
+      }
+    });
+    const timer = setTimeout(() => {
+      sub.subscription.unsubscribe();
+      resolve(null);
+    }, timeoutMs);
+  });
+}
 
 export default function BuilderPage() {
   const router = useRouter();
@@ -21,13 +47,14 @@ export default function BuilderPage() {
     let cancelled = false;
 
     async function boot() {
-      const { data } = await supabase.auth.getSession();
-      if (!data.session) {
+      const session = await resolveSession();
+      if (cancelled) return;
+
+      if (!session) {
         router.replace("/login");
         return;
       }
-      if (cancelled) return;
-      const uid = data.session.user.id;
+      const uid = session.user.id;
 
       /* Load saved builder projects (most recent first). */
       const projects: ProjectRow[] = [];
@@ -39,11 +66,16 @@ export default function BuilderPage() {
           .order("updated_at", { ascending: false })
           .limit(10);
         (rows || []).forEach((ws) => {
-          const n = ws.nodes as { builder?: boolean; tree?: unknown; conns?: unknown[] } | null;
+          const n = ws.nodes as
+            | { builder?: boolean; tree?: unknown; conns?: unknown[] }
+            | null;
           projects.push({
             id: ws.id,
             name: ws.name || "Untitled",
-            data: n && n.builder && n.tree ? { tree: n.tree, conns: (n.conns as never[]) || [] } : null,
+            data:
+              n && n.builder && n.tree
+                ? { tree: n.tree, conns: (n.conns as never[]) || [] }
+                : null,
           });
         });
       } catch {
@@ -67,7 +99,10 @@ export default function BuilderPage() {
               edges: [],
             };
             if (projectId) {
-              const { error } = await supabase.from("workspaces").update(payload).eq("id", projectId);
+              const { error } = await supabase
+                .from("workspaces")
+                .update(payload)
+                .eq("id", projectId);
               if (error) return { error: friendly(error.message) };
               return { id: projectId };
             }
@@ -81,15 +116,25 @@ export default function BuilderPage() {
           },
           signOut: async () => {
             await supabase.auth.signOut();
-            router.replace("/login");
+            window.location.assign("/login");
           },
         });
       });
     }
 
-    boot().catch((e) => setLoadError(e instanceof Error ? e.message : "Failed to load"));
+    boot().catch((e) =>
+      setLoadError(e instanceof Error ? e.message : "Failed to load")
+    );
+
+    /* If the session goes away in another tab, don't leave a dead workspace
+       sitting open here. */
+    const { data: sub } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "SIGNED_OUT") window.location.assign("/login");
+    });
+
     return () => {
       cancelled = true;
+      sub.subscription.unsubscribe();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [router]);
