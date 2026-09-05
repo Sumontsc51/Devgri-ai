@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
+import { stripApiKeys } from "@/lib/workspace";
 import { BUILDER_CSS, BUILDER_HTML } from "./ui";
 import { initBuilder, type ProjectRow } from "./engine";
 
@@ -95,7 +96,12 @@ export default function BuilderPage() {
             const payload = {
               user_id: uid,
               name,
-              nodes: { builder: true, tree, conns, name },
+              nodes: {
+                builder: true,
+                tree: stripApiKeys(tree),
+                conns: stripApiKeys(conns),
+                name,
+              },
               edges: [],
             };
             if (projectId) {
