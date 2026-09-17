@@ -23,6 +23,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
+import { parseAuthCallback } from "@/lib/auth-callback";
 import type { EmailOtpType } from "@supabase/supabase-js";
 
 export default function AuthCallbackPage() {
@@ -32,20 +33,15 @@ export default function AuthCallbackPage() {
     let cancelled = false;
 
     async function finish() {
-      const query = new URLSearchParams(window.location.search);
-      const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+      const { errorDescription, next, code, tokenHash, type } =
+        parseAuthCallback(window.location.search, window.location.hash);
 
-      const failure =
-        query.get("error_description") || hash.get("error_description");
-      if (failure) {
-        setError(failure);
+      if (errorDescription) {
+        setError(errorDescription);
         return;
       }
 
-      const next = query.get("next") || "/builder";
-      const code = query.get("code");
-      const tokenHash = query.get("token_hash");
-      const type = query.get("type") as EmailOtpType | null;
+      const otpType = type as EmailOtpType | null;
 
       if (code) {
         const { error: e } = await supabase.auth.exchangeCodeForSession(code);
@@ -54,10 +50,10 @@ export default function AuthCallbackPage() {
           setError(e.message);
           return;
         }
-      } else if (tokenHash && type) {
+      } else if (tokenHash && otpType) {
         const { error: e } = await supabase.auth.verifyOtp({
           token_hash: tokenHash,
-          type,
+          type: otpType,
         });
         if (cancelled) return;
         if (e) {
